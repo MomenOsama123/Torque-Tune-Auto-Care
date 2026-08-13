@@ -18,6 +18,7 @@ planning/.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 
@@ -42,6 +43,29 @@ class CallLog:
     total_tokens: int = 0
     latency_seconds: float = 0.0
     token_source: str = "offline-estimate"  # or "real-usage-metadata"
+    cost_usd: float | None = None
+
+
+def _calculate_cost(input_tokens: int, output_tokens: int) -> float | None:
+    """Calculate USD cost only when explicit per-million-token prices are configured.
+
+    Defaults are intentionally absent so an offline/mock run can never silently
+    claim a dollar cost. Set PLANNING_INPUT_USD_PER_1M and
+    PLANNING_OUTPUT_USD_PER_1M for the model actually used.
+    """
+    try:
+        input_rate = float(os.getenv("PLANNING_INPUT_USD_PER_1M", ""))
+        output_rate = float(os.getenv("PLANNING_OUTPUT_USD_PER_1M", ""))
+    except ValueError:
+        return None
+    return (input_tokens / 1_000_000) * input_rate + (output_tokens / 1_000_000) * output_rate
+
+
+def _refresh_cost(log: CallLog) -> None:
+    if log.token_source == "real-usage-metadata":
+        log.cost_usd = _calculate_cost(log.input_tokens, log.output_tokens)
+    else:
+        log.cost_usd = None
 
 
 class _StructuredProxy:
@@ -63,6 +87,7 @@ class _StructuredProxy:
         self._log.input_tokens += in_tok
         self._log.output_tokens += out_tok
         self._log.total_tokens += in_tok + out_tok
+        _refresh_cost(self._log)
         return result
 
 
@@ -94,12 +119,14 @@ class InstrumentedLLM:
             self.log.total_tokens += usage.get(
                 "total_tokens", usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
             )
+            _refresh_cost(self.log)
         else:
             in_tok = _approx_tokens(prompt_text)
             out_tok = _approx_tokens(getattr(result, "content", str(result)))
             self.log.input_tokens += in_tok
             self.log.output_tokens += out_tok
             self.log.total_tokens += in_tok + out_tok
+            _refresh_cost(self.log)
         return result
 
     def with_structured_output(self, schema, *, method):
