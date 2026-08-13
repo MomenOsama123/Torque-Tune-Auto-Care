@@ -313,11 +313,19 @@ with real Claude calls; nothing else needs to change.
 
 ---
 
-## Week 4 -- Decomposition & Planning (in progress)
+## Week 4 -- Decomposition & Planning
 
-**Status: Issue 1 (fork + setup) and Issue 2 (task decomposition) done.**
-Planning algorithms/routing, self-correction, grounded environment,
-integration, eval harness, and docs/demo (Issues 3-8) not started.
+**Status: core planning implementation is complete and the planning layer is
+now wired into the live agent loop.** The decomposition, routing, grounding,
+self-correction, evaluation harness, and live integration paths are
+implemented. Final submission evidence still requires a live-key evaluation
+run and a clean dependency-complete test run.
+
+The live integration is in `agent/client.py`: `handle_user_request()` keeps
+the existing Memory/RAG route for normal requests and routes repair/spare-parts
+requests into `planning/`. The planning route reuses the real MCP inventory
+tools and database, then applies the three required algorithms through the
+router before recording the planning result in the same session memory.
 
 **Problem:** preparing spare parts for a repair job when one or more
 required parts are out of stock -- a separate agent from the memory/RAG
@@ -348,7 +356,48 @@ Layout:
 - `planning/tests/` -- cycle rejection, the vendored `Plan` model's
   8-task cap, and the divergence scenario
 - `planning/SEAMS.md` -- seam-by-seam status
-- `planning_eval/` -- not created yet (Issue 7)
+- `planning_eval/` -- fixed scenarios, metrics, and comparison harness
 
-Full write-up (why the problem is real, per-concern justification, the
-comparison table) lands once the corresponding Issues (3-8) are done.
+### Evaluation and reproducibility
+
+Run the fixed planning evaluation with:
+
+```bash
+python planning_eval/run_eval.py
+```
+
+The generated table now includes **Success, LLM calls, Tool calls, Total
+tokens, Latency, and Cost (USD)**. Token counts come from Claude usage
+metadata when a live `ANTHROPIC_API_KEY` is configured; otherwise they are
+explicitly labelled `offline-estimate`. Cost is intentionally shown as
+`N/A (offline)` unless live usage metadata is available and the two pricing
+variables below are configured for the actual model being evaluated:
+
+```text
+PLANNING_INPUT_USD_PER_1M=<input price>
+PLANNING_OUTPUT_USD_PER_1M=<output price>
+```
+
+Never commit the API key or a real `.env` file. Use `.env.example` as the
+local configuration template.
+
+### Test status
+
+The obsolete `tests/test_planning_issue2.py` import of
+`planning.spare_parts_decomposition` was replaced with tests against the
+current `planning.fulfillment_decomposition` API. Before submission, install
+all dependencies from `requirements.txt` and run:
+
+```bash
+pytest -q
+```
+
+The repository currently cannot claim a clean local pytest run in an
+environment where `langchain-core`/other requirements have not been
+installed; that is an environment/dependency issue, not a reason to silently
+mark the tests as passing.
+
+The final submission should also include the completed planning comparison
+table, reproducible evaluation output, and `planning/DEMO_TRANSCRIPT.md`,
+which shows decomposition-first vs dynamic divergence, routing, grounded
+failure rejection, and self-correction.
