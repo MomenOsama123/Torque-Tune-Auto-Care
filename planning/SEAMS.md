@@ -1,4 +1,4 @@
-# Seams -- status after Issue 2
+# Seams -- current Week 4 status
 
 ## 1. Model provider -- RESOLVED (Issue 2)
 Confirmed by inspecting planning/vendor/planning_lab/algorithms/*.py: every
@@ -22,9 +22,11 @@ re-implementing a meaningful slice of LangChain, a bigger rebuild than
 adding one official dependency for the same provider.
 
 ## 2. environment.py (toolkit default: randomized beta-distribution score)
-Still open -- belongs to Issue 4. `planning/vendor/planning_lab/algorithms/
-environment.py` is vendored unmodified and not called by anything in
-`planning/` yet.
+RESOLVED -- `planning/grounded_environment.py` is the project-owned
+environment adapter. It validates planning decisions against the real
+spare-parts database through the existing MCP read tools. The vendored
+randomized `Environment` remains untouched and is used only for the
+explicit ungrounded-vs-grounded evaluation comparison.
 
 ## 3. Execution/tool-calling layer -- RESOLVED (Issue 2)
 The vendored `decomposition.execute_plan()` / `dynamic_decomposition
@@ -67,3 +69,13 @@ purpose, since replacing it is Issue 4's job, not Issue 3's.
 `planning/model_provider.py` gained offline mocks for `ThoughtCandidates`,
 `ThoughtEvaluation`, `LATSActionBatch`, `ValueEstimate` (Issue 2's
 `DynamicDecision` mock untouched).
+
+## 7. Live agent integration -- RESOLVED
+`agent/client.py` now exposes `handle_user_request()`, the live routing seam
+used by the CLI agent. Repair/spare-parts requests are routed into the Week 4
+planning workflow; ordinary requests retain the existing Memory/RAG path.
+The planning result is written into the same session memory, so planning runs
+alongside (not instead of) the existing Memory/RAG capabilities. The live
+route calls `build_plan_first()` / `execute_plan_first()` and then
+`run_planning_layer()`, which dispatches Plan-and-Solve / Tree of Thoughts /
+LATS and the grounded environment.
