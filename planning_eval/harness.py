@@ -205,6 +205,7 @@ def run_lats_grounding_case(scenario: Scenario, findings: str) -> list[Row]:
                     total_tokens=llm.log.total_tokens,
                     token_source=llm.log.token_source,
                     latency_seconds=wall,
+                    cost_usd=llm.log.cost_usd,
                     output=result.output,
                     detail=f"best_score={result.best_score} fabricated_accepted={fabricated_accepted}",
                     trace={"output": result.output, "best_score": result.best_score, "iterations": result.iterations},
@@ -236,6 +237,7 @@ def run_reflexion_case(scenario: Scenario, findings: str) -> list[Row]:
                     tool_calls=0,  # grounding tool calls counted inside GroundedFulfillmentEnvironment
                     total_tokens=llm.log.total_tokens,
                     token_source=llm.log.token_source,
+                    cost_usd=llm.log.cost_usd,
                     latency_seconds=wall,
                     output=result.output,
                     detail=f"trials={len(result.trials)}",
