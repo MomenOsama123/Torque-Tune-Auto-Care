@@ -65,6 +65,7 @@ def save_artifact(row, run_index: int) -> Path:
         "tool_calls": row.tool_calls,
         "total_tokens": row.total_tokens,
         "token_source": row.token_source,
+        "cost_usd": row.cost_usd,
         "latency_seconds": row.latency_seconds,
         "result": row.output,
         **row.trace,
@@ -77,8 +78,8 @@ def save_artifact(row, run_index: int) -> Path:
 def render_table(rows) -> str:
     header = (
         "| Concern | Case | Method | Success | LLM calls | Tool calls | "
-        "Total tokens (source) | Latency (s) | Detail |\n"
-        "|---|---|---|---|---|---|---|---|---|\n"
+        "Total tokens (source) | Latency (s) | Cost (USD) | Detail |\n"
+        "|---|---|---|---|---|---|---|---|---|---|\n"
     )
     lines = [header]
     for row in rows:
@@ -86,7 +87,7 @@ def render_table(rows) -> str:
         lines.append(
             f"| {row.concern} | {row.case} | {row.method} | {'success' if row.success else 'fail'} | "
             f"{row.llm_calls} | {row.tool_calls} | {row.total_tokens} ({row.token_source}) | "
-            f"{row.latency_seconds:.4f} | {detail} |\n"
+            f"{row.latency_seconds:.4f} | {"N/A (offline)" if row.cost_usd is None else f"${row.cost_usd:.6f}"} | {detail} |\n"
         )
     return "".join(lines)
 
