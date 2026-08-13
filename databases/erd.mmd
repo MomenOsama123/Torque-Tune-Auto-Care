@@ -1,0 +1,70 @@
+erDiagram
+    Users ||--o{ InventoryLogs : "makes"
+    Categories ||--o{ SpareParts : "groups"
+    Suppliers ||--o{ SpareParts : "supplies"
+    SpareParts ||--o{ InventoryLogs : "has history"
+    SpareParts ||--o{ AlternativeParts : "part_id"
+    SpareParts ||--o{ AlternativeParts : "alternative_part_id"
+    Users {
+        int id PK
+        string name
+        string email
+        string role "technician or manager"
+        datetime created_at
+    }
+    Categories {
+        int id PK
+        string name
+        string description
+    }
+    Suppliers {
+        int id PK
+        string name
+        string phone
+        string email
+        string address
+    }
+    SpareParts {
+        int id PK
+        string part_name
+        string part_number
+        int category_id FK
+        int supplier_id FK
+        int quantity
+        decimal price
+        string location
+        int minimum_stock
+        string status "active or discontinued"
+    }
+    AlternativeParts {
+        int id PK
+        int part_id FK
+        int alternative_part_id FK
+    }
+    InventoryLogs {
+        int id PK
+        int part_id FK
+        int user_id FK
+        int old_quantity
+        int new_quantity
+        string action "increase, decrease, set"
+        string reason
+        datetime created_at
+    }
+    %% Memory System Blocks Added Below %%
+    
+    EpisodicMemory {
+        int id PK
+        string event_type
+        string content "JSON string of the event"
+        string promotion_reason
+        datetime created_at
+    }
+    SemanticMemory {
+        int id PK
+        string fact_key
+        string fact_value
+        int version
+        boolean is_active
+        datetime updated_at
+    }

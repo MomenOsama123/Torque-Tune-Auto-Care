@@ -1,0 +1,1 @@
+from .resources import inventory_policy

@@ -1,0 +1,1 @@
+from .elicitation import build_inventory_confirmation
