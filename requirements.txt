@@ -9,7 +9,7 @@
 # mocks described in that file -- everything still runs end to end.
 
 # --- Vector store (mcp-server/rag/vector_store.py) ---
-hnswlib>=0.8.0
+
 numpy>=1.26.0
 
 # --- Embeddings: TF-IDF + Truncated SVD (mcp-server/rag/embeddings.py) ---
