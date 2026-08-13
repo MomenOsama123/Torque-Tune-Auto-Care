@@ -59,6 +59,9 @@ from negotiation import negotiation  # noqa: E402
 from notifications import notifier  # noqa: E402
 from fastmcp import ElicitationResult  # noqa: E402
 from app import memory_manager  # noqa: E402  (same instance write_tools.py writes episodic/scratchpad into)
+from planning.fulfillment_decomposition import JobRequest, build_plan_first, execute_plan_first
+from planning.fulfillment_planning import run_planning_layer
+from planning.model_provider import get_llm
 
 
 class CLIContext:
@@ -105,6 +108,79 @@ def list_visible_tools(role: str) -> list:
     """tools/list, filtered to what this session's role is allowed to see."""
     registered = set(server.mcp._tools.keys())
     return sorted(notifier.visible_tools_for_role(role) & registered)
+
+
+def is_planning_request(request: str) -> bool:
+    """Route real repair-fulfillment requests into the planning workflow.
+
+    The existing Memory/RAG path remains unchanged; this is the live-agent
+    routing seam required by the Week 4 integration requirement.
+    """
+    text = request.lower()
+    planning_terms = (
+        "spare part",
+        "spare parts",
+        "repair job",
+        "out of stock",
+        "stock",
+        "fulfill",
+        "fulfillment",
+        "prepare parts",
+    )
+    return any(term in text for term in planning_terms)
+
+
+def handle_user_request(
+    request: str,
+    *,
+    job: JobRequest | None = None,
+    llm=None,
+) -> dict:
+    """Live-agent router: keep normal requests on the existing path and
+    send repair/spare-parts requests through decomposition + planning.
+
+    ``job`` is supplied by the agent/application layer once it has parsed
+    the structured repair job. The textual request is used only for routing,
+    not for inventing part names.
+    """
+    if not is_planning_request(request):
+        return {"route": "memory_rag", "handled": False}
+
+    if job is None:
+        raise ValueError("A JobRequest is required for a planning-routed request")
+
+    llm = llm or get_llm()
+    print("\n[agent router] route=planning")
+    print(f"[planning] job={job.job_id} parts={job.required_parts}")
+
+    plan = build_plan_first(job)
+    print(f"[planning] decomposition-first tasks={len(plan.tasks)}")
+    pf_outputs, decomposition_telemetry = execute_plan_first(plan, job, llm)
+    print(f"[planning] decomposition tool_calls={decomposition_telemetry.tool_calls} llm_calls={decomposition_telemetry.llm_calls}")
+
+    planning_result = run_planning_layer(job, pf_outputs, llm)
+    decision = planning_result["final_decision"].output
+    print(f"[planning] final decision={decision}")
+    print(f"[planning] customer notification={planning_result['customer_notification']}")
+
+    memory_manager.add_interaction(
+        "planning",
+        {
+            "job_id": job.job_id,
+            "request": request,
+            "decision": decision,
+            "customer_notification": planning_result["customer_notification"],
+        },
+    )
+
+    return {
+        "route": "planning",
+        "handled": True,
+        "job": job,
+        "decomposition": pf_outputs,
+        "decomposition_telemetry": decomposition_telemetry,
+        "planning": planning_result,
+    }
 
 
 async def main(auto_confirm: bool | None = None) -> dict:
@@ -173,6 +249,21 @@ async def main(auto_confirm: bool | None = None) -> dict:
     print(f"  semantic facts: {memory_context['semantic_memory']}")
     print(f"  recent episodes: {len(memory_context['episodic_memory'])}")
     print(f"  short-term buffer size: {len(memory_context['short_term_memory'])}")
+
+    # --- live planning integration ---
+    planning_request = (
+        "Prepare spare parts for repair job #4521; "
+        "Brake Disc - Standard is required and may be out of stock. "
+        "Decide whether to proceed or delay."
+    )
+    planning_result = handle_user_request(
+        planning_request,
+        job=JobRequest(
+            job_id="4521",
+            required_parts=["Brake Disc - Standard", "Oil Filter - Standard"],
+        ),
+    )
+    print(f"[agent router] completed route={planning_result['route']}")
 
     # --- write tool that trips the elicitation trigger ---
     # Rear Brake Pad Set (part_id=2) starts at quantity=2; decreasing by 2
