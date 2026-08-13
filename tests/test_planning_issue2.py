@@ -85,8 +85,11 @@ def test_static_plan_is_valid_and_contains_required_branches(spare_parts_db):
 
     assert len(plan.tasks) <= 8
     ids = {task.id for task in plan.tasks}
-    assert any("check_stock" in task_id for task_id in ids)
-    assert any("alternatives" in task_id for task_id in ids)
+    # Real task ids are "check_<slug>" / "altsearch_<slug>" (see
+    # build_plan_first in fulfillment_decomposition.py), not the toolkit's
+    # generic "check_stock"/"alternatives" demo names.
+    assert any(task_id.startswith("check_") for task_id in ids)
+    assert any(task_id.startswith("altsearch_") for task_id in ids)
 
     # The toolkit Plan validates the dependency graph during construction.
     assert len(plan.execution_batches()) >= 1
@@ -95,16 +98,16 @@ def test_static_plan_is_valid_and_contains_required_branches(spare_parts_db):
 def test_dynamic_decomposition_observes_stock_before_opening_alt_branch(spare_parts_db):
     job = JobRequest(job_id="job-test", required_parts=["Brake Pad Set - Front"])
 
-    class OfflineLLM:
-        def invoke(self, messages, **kwargs):
-            class Response:
-                content = "Proceed with the originally requested part."
-            return Response()
+    # dynamic_fulfillment() calls llm.with_structured_output(DynamicDecision,
+    # method="json_schema").invoke(...) and reads decision.done /
+    # decision.next_task. A hand-rolled stub that only returns a bare
+    # .content string doesn't satisfy that contract. Use the project's own
+    # offline fallback (the same one get_llm() returns when
+    # ANTHROPIC_API_KEY isn't set), which already implements structured
+    # output correctly -- see planning/model_provider.py.
+    from planning.model_provider import _OfflineFulfillmentLLM
 
-        def with_structured_output(self, schema, *, method):
-            return self
-
-    history, telemetry = dynamic_fulfillment(job, OfflineLLM())
+    history, telemetry = dynamic_fulfillment(job, _OfflineFulfillmentLLM())
     assert history
     # A stocked part should not require an alternative search.
     tool_names = [entry[0] for entry in telemetry.tool_call_log]
