@@ -72,7 +72,7 @@ class _OfflineFulfillmentLLM:
 
     def invoke(self, messages, **kwargs):
         prompt = messages[-1][1]
-        return SimpleNamespace(content=_mock_synthesis(prompt))
+        return SimpleNamespace(content=_mock_invoke(prompt))
 
     def with_structured_output(self, schema, *, method):
         assert method == "json_schema"
@@ -103,6 +103,108 @@ def _mock_synthesis(prompt: str) -> str:
     )
 
 
+def _mock_invoke(prompt: str) -> str:
+    """Issue 5 -- dispatches every plain `llm.invoke()` call (the only
+    interface planning/vendor/planning_lab/algorithms/{self_refine,
+    reflexion}.py use; neither has a with_structured_output() schema, see
+    _mock_structured's docstring below) to a heuristic matching which of
+    the four distinct prompts self_refine/reflexion actually send --
+    identified by the fixed phrasing those vendored files themselves
+    write, not guessed. Falls back to _mock_synthesis (Issue 3's
+    proceed/alternative/delay heuristic) for everything else -- i.e.
+    plan_and_solve.py's and lats.py's own invoke() calls, unchanged from
+    before Issue 5."""
+    if "Episodic memory from previous failed trials:" in prompt:
+        return _mock_reflexion_attempt(prompt)
+    if "State what I did wrong and the specific strategy" in prompt:
+        return _mock_reflexion_reflection(prompt)
+    if "List concrete issues. If there are none, respond exactly PASS." in prompt:
+        return _mock_self_refine_critique(prompt)
+    if "Return only the improved deliverable." in prompt:
+        return _mock_self_refine_revise(prompt)
+    return _mock_synthesis(prompt)
+
+
+def _mock_self_refine_critique(prompt: str) -> str:
+    """Issue 5 -- offline stand-in for self_refine.py's critic call.
+    self_refine.reflect_and_refine() already computes REAL deterministic
+    checks (deterministic_checks(), grounded in the draft's own word
+    count/goal-term overlap/structure -- not an LLM opinion) and embeds
+    them in the prompt as 'External deterministic checks:\\n...'. This
+    mock only echoes that real, already-grounded report back as the
+    critique instead of inventing a separate one -- same 'don't fabricate
+    what's already grounded' philosophy as planning/grounded_environment.py."""
+    match = re.search(r"External deterministic checks:\n(.*?)\n\nDraft:", prompt, re.DOTALL)
+    checks = match.group(1).strip() if match else ""
+    if checks == "- Deterministic checks passed.":
+        return "PASS"
+    return f"mock heuristic critique -- deterministic checks found:\n{checks}"
+
+
+def _mock_self_refine_revise(prompt: str) -> str:
+    """Issue 5 -- offline stand-in for self_refine.py's revision call.
+    Turns the original draft into a short structured list (fixes the
+    real 'no visible structure' check) and repeats the goal in an
+    explicit heading (fixes the real 'none of the goal's significant
+    terms' check) -- addressing the SAME concrete, already-grounded
+    issues the critique surfaced, not inventing new content."""
+    draft_match = re.search(r"Draft:\n(.*?)\n\nGrounded checks:", prompt, re.DOTALL)
+    goal_match = re.search(r"^Goal: (.*?)\n\nDraft:", prompt, re.DOTALL)
+    draft = draft_match.group(1).strip() if draft_match else prompt.strip()
+    goal = goal_match.group(1).strip() if goal_match else "this update"
+    return (
+        f"## {goal}\n\n"
+        f"- {draft}\n"
+        "- This was checked for completeness and clarity before sending.\n"
+        f"- Reply to this message if anything about {goal} needs follow-up."
+    )
+
+
+def _mock_reflexion_attempt(prompt: str) -> str:
+    """Issue 5 -- offline stand-in for reflexion.py's acting-agent call.
+    Reuses _mock_synthesis's real findings-parsing heuristic UNLESS a
+    prior trial's reflection (see _mock_reflexion_reflection) left a
+    'remembered lesson: verified alternative ...' marker in the episodic
+    memory this prompt embeds -- in which case it obeys that lesson,
+    demonstrating a reflection actually changing the next trial's
+    output, not just being generated and ignored."""
+    lesson = re.search(r"remembered lesson: verified alternative '([^']+)' \(qty=(\d+)\)", prompt)
+    if lesson:
+        name, qty = lesson.group(1), lesson.group(2)
+        return (
+            f"mock heuristic (reflexion, applying remembered lesson): proceed with "
+            f"alternative {name!r} (qty={qty}); verified in stock per the previous "
+            "trial's grounded feedback."
+        )
+    return _mock_synthesis(prompt)
+
+
+def _mock_reflexion_reflection(prompt: str) -> str:
+    """Issue 5 -- offline stand-in for reflexion.py's reflection call.
+    Does not invent which alternative is real -- re-reads the SAME real
+    '<name> (qty=N)' findings pairs already present in this trial's own
+    Task text (the real facts Issue 2's altsearch step put there), and
+    names the first one that was NOT the failed attempt itself, so the
+    next trial has a genuinely different, grounded candidate to try.
+    Falls back to recommending delay when nothing else is available."""
+    failed_match = re.search(r"Failed attempt:\n(.*?)\n\nExternal environment feedback", prompt, re.DOTALL)
+    failed_attempt = (failed_match.group(1) if failed_match else "").lower()
+    pairs = re.findall(r"([\w][\w ]*?) \(qty=([1-9]\d*)\)", prompt)
+    candidate = next((pair for pair in pairs if pair[0].strip().lower() not in failed_attempt), None)
+    if candidate:
+        name, qty = candidate[0].strip(), candidate[1]
+        return (
+            "I proposed a candidate the grounded environment rejected. Next trial, "
+            f"remembered lesson: verified alternative '{name}' (qty={qty}) -- I should "
+            "check the real database before proposing anything else."
+        )
+    return (
+        "I proposed a candidate the grounded environment rejected, and no other "
+        "stocked option appears in the findings. Next trial, I should recommend "
+        "delay instead of guessing again."
+    )
+
+
 def _mock_structured(schema, prompt: str):
     if schema.__name__ == "DynamicDecision":
         return _mock_dynamic_decision(schema, prompt)
@@ -114,9 +216,12 @@ def _mock_structured(schema, prompt: str):
         return _mock_lats_action_batch(schema, prompt)
     if schema.__name__ == "ValueEstimate":
         return _mock_value_estimate(schema, prompt)
-    # Deliberately not implemented: Self-Refine/Reflexion schemas belong
-    # to a later Issue. Raising here (instead of guessing a shape) keeps
-    # this file honest about what it actually supports as of Issue 3.
+    # Self-Refine/Reflexion (Issue 5) never reach this function: confirmed
+    # by inspecting planning/vendor/planning_lab/algorithms/{self_refine,
+    # reflexion}.py -- both call only llm.invoke(), never
+    # with_structured_output(). Their offline mocks live in _mock_invoke()
+    # above instead. This branch stays a hard failure for any OTHER
+    # not-yet-supported schema, instead of guessing a shape.
     raise NotImplementedError(
         f"No offline mock defined for {schema.__name__} yet -- that "
         f"belongs to a later Issue; add its mock there, don't guess one here."
