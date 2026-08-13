@@ -1,0 +1,16 @@
+{
+  "mode": "tree-of-thoughts",
+  "model": "claude-sonnet-4-6",
+  "concern": "planning-algorithm",
+  "case": "lookahead_needed",
+  "success": true,
+  "llm_calls": 3,
+  "tool_calls": 0,
+  "total_tokens": 270,
+  "token_source": "offline-estimate",
+  "latency_seconds": 0.00048550000065006316,
+  "result": "Use Radiator Hose Heavy Duty (qty=9)",
+  "state": "Use Radiator Hose Heavy Duty (qty=9)",
+  "score": 0.9,
+  "rationale": "mock heuristic: higher stocked quantity (9) scores higher"
+}

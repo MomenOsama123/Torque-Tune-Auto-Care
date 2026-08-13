@@ -1,0 +1,37 @@
+{
+  "mode": "decomposition-first",
+  "model": "claude-sonnet-4-6",
+  "concern": "decomposition",
+  "case": "dynamic_favored",
+  "success": true,
+  "llm_calls": 1,
+  "tool_calls": 8,
+  "total_tokens": 59,
+  "token_source": "offline-estimate",
+  "latency_seconds": 0.009616299998015165,
+  "result": "mock heuristic: proceed with the originally requested part (found positive stock -- Spark Plug: id=20 quantity=25).",
+  "plan": [
+    "check_spark_plug",
+    "altsearch_spark_plug",
+    "check_air_filter",
+    "altsearch_air_filter",
+    "decide"
+  ],
+  "outputs": {
+    "check_air_filter": "Air Filter: id=21 quantity=0",
+    "check_spark_plug": "Spark Plug: id=20 quantity=25",
+    "altsearch_air_filter": "Air Filter: alternatives=[Air Filter Premium (qty=8)]",
+    "altsearch_spark_plug": "Spark Plug: alternatives=[none]",
+    "decide": "mock heuristic: proceed with the originally requested part (found positive stock -- Spark Plug: id=20 quantity=25)."
+  },
+  "tool_call_log": [
+    "search_spare_part('Air Filter')",
+    "check_stock(21)",
+    "search_spare_part('Spark Plug')",
+    "check_stock(20)",
+    "suggest_alternative(21)",
+    "search_spare_part('Air Filter Premium')",
+    "check_stock(22)",
+    "suggest_alternative(20)"
+  ]
+}

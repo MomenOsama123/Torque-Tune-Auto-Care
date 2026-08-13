@@ -1,0 +1,16 @@
+{
+  "mode": "self-refine (notification)",
+  "model": "claude-sonnet-4-6",
+  "concern": "self-correction",
+  "case": "reflexion_needed",
+  "success": true,
+  "llm_calls": 3,
+  "tool_calls": 0,
+  "total_tokens": 594,
+  "token_source": "offline-estimate",
+  "latency_seconds": 0.0016303000156767666,
+  "result": "## A short, plain-language customer-facing update for job job-204 about this decision: mock heuristic (reflexion, applying remembered lesson): proceed with alternative 'Fuel Pump OEM' (qty=7); verified in stock per the previous trial's grounded feedback.\n\n- mock heuristic: delay the job -- neither the requested part nor any alternative has stock, and this system has no supplier-availability tool to check next.\n- This was checked for completeness and clarity before sending.\n- Reply to this message if anything about A short, plain-language customer-facing update for job job-204 about this decision: mock heuristic (reflexion, applying remembered lesson): proceed with alternative 'Fuel Pump OEM' (qty=7); verified in stock per the previous trial's grounded feedback. needs follow-up.",
+  "draft": "mock heuristic: delay the job -- neither the requested part nor any alternative has stock, and this system has no supplier-availability tool to check next.",
+  "critique": "mock heuristic critique -- deterministic checks found:\n- The deliverable is under 80 words and is probably incomplete.\n- The deliverable has no visible structure (headings or list items).",
+  "revised": "## A short, plain-language customer-facing update for job job-204 about this decision: mock heuristic (reflexion, applying remembered lesson): proceed with alternative 'Fuel Pump OEM' (qty=7); verified in stock per the previous trial's grounded feedback.\n\n- mock heuristic: delay the job -- neither the requested part nor any alternative has stock, and this system has no supplier-availability tool to check next.\n- This was checked for completeness and clarity before sending.\n- Reply to this message if anything about A short, plain-language customer-facing update for job job-204 about this decision: mock heuristic (reflexion, applying remembered lesson): proceed with alternative 'Fuel Pump OEM' (qty=7); verified in stock per the previous trial's grounded feedback. needs follow-up."
+}

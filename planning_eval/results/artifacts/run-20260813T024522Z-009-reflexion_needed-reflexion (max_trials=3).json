@@ -1,0 +1,30 @@
+{
+  "mode": "reflexion (max_trials=3)",
+  "model": "claude-sonnet-4-6",
+  "concern": "self-correction",
+  "case": "reflexion_needed",
+  "success": true,
+  "llm_calls": 3,
+  "tool_calls": 0,
+  "total_tokens": 467,
+  "token_source": "offline-estimate",
+  "latency_seconds": 0.00697829999262467,
+  "result": "mock heuristic (reflexion, applying remembered lesson): proceed with alternative 'Fuel Pump OEM' (qty=7); verified in stock per the previous trial's grounded feedback.",
+  "trials": [
+    {
+      "number": 1,
+      "attempt": "mock heuristic: proceed with alternative 'Fuel Pump Racing Edition' (qty=50); the originally requested part has no stock.",
+      "success": false,
+      "reflection": "I proposed a candidate the grounded environment rejected. Next trial, remembered lesson: verified alternative 'Fuel Pump OEM' (qty=7) -- I should check the real database before proposing anything else."
+    },
+    {
+      "number": 2,
+      "attempt": "mock heuristic (reflexion, applying remembered lesson): proceed with alternative 'Fuel Pump OEM' (qty=7); verified in stock per the previous trial's grounded feedback.",
+      "success": true,
+      "reflection": null
+    }
+  ],
+  "memory": [
+    "I proposed a candidate the grounded environment rejected. Next trial, remembered lesson: verified alternative 'Fuel Pump OEM' (qty=7) -- I should check the real database before proposing anything else."
+  ]
+}

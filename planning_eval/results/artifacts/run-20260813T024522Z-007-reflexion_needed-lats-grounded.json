@@ -1,0 +1,16 @@
+{
+  "mode": "lats-grounded",
+  "model": "claude-sonnet-4-6",
+  "concern": "grounding",
+  "case": "reflexion_needed",
+  "success": true,
+  "llm_calls": 4,
+  "tool_calls": 1,
+  "total_tokens": 559,
+  "token_source": "offline-estimate",
+  "latency_seconds": 0.0027852000202983618,
+  "result": "Delay the job without checking any alternative first.",
+  "output": "Delay the job without checking any alternative first.",
+  "best_score": 0.7,
+  "iterations": 1
+}

@@ -1,0 +1,14 @@
+{
+  "mode": "plan-and-solve",
+  "model": "claude-sonnet-4-6",
+  "concern": "planning-algorithm",
+  "case": "lookahead_needed",
+  "success": false,
+  "llm_calls": 1,
+  "tool_calls": 0,
+  "total_tokens": 79,
+  "token_source": "offline-estimate",
+  "latency_seconds": 0.00029020002693869174,
+  "result": "mock heuristic: proceed with alternative 'Radiator Hose Std' (qty=3); the originally requested part has no stock.",
+  "question": "Choose the best in-stock alternative for 'Radiator Hose' among: Radiator Hose Std (qty=3), Radiator Hose Heavy Duty (qty=9). Prefer higher quantity."
+}

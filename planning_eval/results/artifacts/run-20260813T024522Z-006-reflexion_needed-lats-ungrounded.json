@@ -1,0 +1,16 @@
+{
+  "mode": "lats-ungrounded",
+  "model": "claude-sonnet-4-6",
+  "concern": "grounding",
+  "case": "reflexion_needed",
+  "success": true,
+  "llm_calls": 2,
+  "tool_calls": 0,
+  "total_tokens": 268,
+  "token_source": "offline-estimate",
+  "latency_seconds": 0.0013021999911870807,
+  "result": "mock heuristic: proceed with alternative 'Fuel Pump Racing Edition' (qty=50); the originally requested part has no stock.",
+  "output": "mock heuristic: proceed with alternative 'Fuel Pump Racing Edition' (qty=50); the originally requested part has no stock.",
+  "best_score": 0.8412,
+  "iterations": 1
+}

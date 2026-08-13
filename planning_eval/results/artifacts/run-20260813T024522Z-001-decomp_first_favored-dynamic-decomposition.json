@@ -1,0 +1,47 @@
+{
+  "mode": "dynamic-decomposition",
+  "model": "claude-sonnet-4-6",
+  "concern": "decomposition",
+  "case": "decomp_first_favored",
+  "success": true,
+  "llm_calls": 5,
+  "tool_calls": 10,
+  "total_tokens": 276,
+  "token_source": "offline-estimate",
+  "latency_seconds": 0.01546649998635985,
+  "result": "mock heuristic: proceed with alternative 'Brake Disc XL' (qty=4); the originally requested part has no stock.",
+  "history": [
+    [
+      "check:Brake Disc",
+      "Brake Disc: id=10 quantity=0"
+    ],
+    [
+      "altsearch:Brake Disc",
+      "alternatives=[Brake Disc XL (qty=4)]"
+    ],
+    [
+      "check:Timing Belt",
+      "Timing Belt: id=11 quantity=0"
+    ],
+    [
+      "altsearch:Timing Belt",
+      "alternatives=[Timing Belt Kit (qty=6)]"
+    ],
+    [
+      "decide",
+      "mock heuristic: proceed with alternative 'Brake Disc XL' (qty=4); the originally requested part has no stock."
+    ]
+  ],
+  "tool_call_log": [
+    "search_spare_part('Brake Disc')",
+    "check_stock(10)",
+    "suggest_alternative(10)",
+    "search_spare_part('Brake Disc XL')",
+    "check_stock(12)",
+    "search_spare_part('Timing Belt')",
+    "check_stock(11)",
+    "suggest_alternative(11)",
+    "search_spare_part('Timing Belt Kit')",
+    "check_stock(13)"
+  ]
+}
