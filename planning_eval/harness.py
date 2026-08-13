@@ -43,6 +43,7 @@ class Row:
     tool_calls: int
     total_tokens: int
     token_source: str
+    cost_usd: float | None
     latency_seconds: float
     output: str  # raw decision/result text, for downstream use
     detail: str  # short display string for the table
@@ -77,6 +78,7 @@ def run_decomposition_case(scenario: Scenario) -> list[Row]:
                 tool_calls=telemetry.tool_calls,
                 total_tokens=llm.log.total_tokens,
                 token_source=llm.log.token_source,
+                cost_usd=llm.log.cost_usd,
                 latency_seconds=wall,
                 output=decision_text,
                 detail=decision_text[:150],
@@ -100,6 +102,7 @@ def run_decomposition_case(scenario: Scenario) -> list[Row]:
                 tool_calls=telemetry.tool_calls,
                 total_tokens=llm.log.total_tokens,
                 token_source=llm.log.token_source,
+                cost_usd=llm.log.cost_usd,
                 latency_seconds=wall,
                 output=decision_text,
                 detail=decision_text[:150],
@@ -139,6 +142,7 @@ def run_lookahead_case(scenario: Scenario) -> list[Row]:
             tool_calls=0,
             total_tokens=llm.log.total_tokens,
             token_source=llm.log.token_source,
+            cost_usd=llm.log.cost_usd,
             latency_seconds=wall,
             output=ps_result,
             detail=ps_result[:150],
@@ -162,6 +166,7 @@ def run_lookahead_case(scenario: Scenario) -> list[Row]:
             tool_calls=0,
             total_tokens=llm.log.total_tokens,
             token_source=llm.log.token_source,
+            cost_usd=llm.log.cost_usd,
             latency_seconds=wall,
             output=thought.state,
             detail=f"{thought.state} (score={thought.score})",
@@ -271,6 +276,7 @@ def run_self_refine_case(scenario: Scenario, decision_text: str) -> Row:
             tool_calls=0,
             total_tokens=llm.log.total_tokens,
             token_source=llm.log.token_source,
+            cost_usd=llm.log.cost_usd,
             latency_seconds=wall,
             output=result.revised,
             detail=f"revised != draft: {result.revised != result.draft}",
