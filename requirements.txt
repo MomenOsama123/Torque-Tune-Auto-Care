@@ -9,7 +9,7 @@
 # mocks described in that file -- everything still runs end to end.
 
 # --- Vector store (mcp-server/rag/vector_store.py) ---
-
+hnswlib>=0.8.0
 numpy>=1.26.0
 
 # --- Embeddings: TF-IDF + Truncated SVD (mcp-server/rag/embeddings.py) ---
@@ -29,3 +29,17 @@ python-dotenv>=1.0.1
 
 # --- Tests ---
 pytest>=8.0.0
+
+# --- Week 4 planning/ (see planning/SEAMS.md for why) ---
+# DAG construction, cycle checks, topological order (vendored toolkit's
+# planning_lab/models.py)
+networkx>=3.2
+# Model-provider seam (planning/model_provider.py): the vendored toolkit's
+# algorithms depend on langchain_core.BaseChatModel's public interface;
+# langchain-anthropic implements with_structured_output(..., method=
+# "json_schema") for the same Claude models this repo already calls via
+# `anthropic` directly. Only used when ANTHROPIC_API_KEY is set --
+# planning/model_provider.py falls back to a dependency-free offline mock
+# otherwise, same as mcp-server/rag/llm_client.py.
+langchain-core>=0.3
+langchain-anthropic>=1.1.0

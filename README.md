@@ -310,3 +310,45 @@ all three RAG architectures run through the documented mocks in
 `mcp-server/rag/llm_client.py` -- everything above still runs end to end
 and produces real (if noisier) numbers. Set the key in `.env` to re-run
 with real Claude calls; nothing else needs to change.
+
+---
+
+## Week 4 -- Decomposition & Planning (in progress)
+
+**Status: Issue 1 (fork + setup) and Issue 2 (task decomposition) done.**
+Planning algorithms/routing, self-correction, grounded environment,
+integration, eval harness, and docs/demo (Issues 3-8) not started.
+
+**Problem:** preparing spare parts for a repair job when one or more
+required parts are out of stock -- a separate agent from the memory/RAG
+agent in `agent/client.py`, reusing the same `mcp-server/` and `databases/`.
+Real branching (multiple valid alternative parts), real cost of a wrong
+plan (reserving unavailable inventory, an incompatible substitute). Note:
+this system has no supplier-availability tool (confirmed by inspection --
+`Suppliers` only holds contact info), so "no part and no alternative in
+stock" is a genuine dead end the plan surfaces to a human, not a step the
+plan invents.
+
+**Built on top of the reference toolkit** (not reimplemented):
+github.com/AmrSheta22/task_decomposition_and_planning, vendored into
+`planning/vendor/planning_lab/` -- see `planning/vendor/ATTRIBUTION.md`.
+
+Layout:
+- `planning/vendor/planning_lab/` -- the forked toolkit, unmodified
+- `planning/model_provider.py` -- model-provider seam (real Claude via
+  `langchain_anthropic.ChatAnthropic`, offline fallback otherwise)
+- `planning/fulfillment_decomposition.py` -- decomposition-first
+  (`build_plan_first`/`execute_plan_first`) and dynamic decomposition
+  (`dynamic_fulfillment`), both wired to the real `search_spare_part` /
+  `check_stock` / `suggest_alternative` MCP tools, not free LLM prose
+- `planning/fulfillment_demo.py` -- runnable demo: `python
+  planning/fulfillment_demo.py` shows the two methods diverge on a
+  concrete scenario (dynamic skips an alternative-part search
+  decomposition-first always pays for)
+- `planning/tests/` -- cycle rejection, the vendored `Plan` model's
+  8-task cap, and the divergence scenario
+- `planning/SEAMS.md` -- seam-by-seam status
+- `planning_eval/` -- not created yet (Issue 7)
+
+Full write-up (why the problem is real, per-concern justification, the
+comparison table) lands once the corresponding Issues (3-8) are done.
