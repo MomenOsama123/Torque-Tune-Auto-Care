@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS Checkpoints (
     graph_name    TEXT NOT NULL,
     node_name     TEXT NOT NULL,     -- last node that finished running
     status        TEXT NOT NULL CHECK (status IN (
-                        'running', 'paused_hitl', 'completed', 'failed'
+                        'running', 'paused_hitl', 'paused_external', 'completed', 'failed'
                   )),
     state_json    TEXT NOT NULL,     -- full state snapshot after node_name ran
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -78,10 +78,38 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_paused_external(conn: sqlite3.Connection) -> None:
+    """One-time migration for local dev DBs created before the
+    'paused_external' status existed (Warranty Claim graph's external-wait
+    pause, distinct from 'paused_hitl' -- see engine.py's Interrupt.kind).
+    SQLite can't ALTER a CHECK constraint in place, so if an existing
+    Checkpoints table predates it, rebuild the table. This is safe for
+    this runtime-bookkeeping DB specifically (see module docstring: it
+    holds no business data, and reset_db() already exists for wiping it)."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='Checkpoints'"
+    ).fetchone()
+    if row is None or "paused_external" in row[0]:
+        return
+    conn.executescript(
+        """
+        ALTER TABLE Checkpoints RENAME TO Checkpoints_old;
+        """
+    )
+    conn.executescript(SCHEMA)  # recreates Checkpoints with the new CHECK + Tickets IF NOT EXISTS
+    conn.execute(
+        "INSERT INTO Checkpoints (id, thread_id, graph_name, node_name, status, state_json, created_at) "
+        "SELECT id, thread_id, graph_name, node_name, status, state_json, created_at FROM Checkpoints_old"
+    )
+    conn.executescript("DROP TABLE Checkpoints_old;")
+    conn.commit()
+
+
 def init_db() -> None:
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
+        _migrate_paused_external(conn)
         conn.commit()
     finally:
         conn.close()
