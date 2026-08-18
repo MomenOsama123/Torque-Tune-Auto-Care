@@ -100,3 +100,139 @@ def test_knowledge_graph_answers_a_grounded_question():
     assert result.status == "completed"
     assert result.state["final_status"] == "answered"
     assert result.state["attempts"] >= 1
+
+
+# ---------------------------------------------------------------------
+# Warranty Claim graph -- state_graph/graphs/warranty_graph.py
+# ---------------------------------------------------------------------
+
+
+def test_warranty_claim_wear_reason_excluded_by_policy_within_window():
+    """A plain wear claim on a brakes-category TorqueParts Direct part
+    hits WT-100's wear-exclusion clause -- ground_in_warranty_policy's
+    RAG lookup surfaces that exclusion text, and with no manufacturing-
+    defect override in the stated reason the claim is correctly refused
+    by policy even though it's well inside the 18-month base window."""
+    from state_graph.graphs.warranty_graph import build_graph
+
+    compiled = build_graph().compile()
+    result = compiled.invoke(
+        _tid(),
+        {
+            "part_id": 4,
+            "user_id": 2,
+            "inventory_log_id": 1,
+            "claim_reason": "wear on rotor surface",
+        },
+    )
+    assert result.status == "completed"
+    assert result.state["final_status"] == "not_eligible"
+    assert result.state["policy_grounded"] is True
+
+
+def test_warranty_claim_approved_on_first_submission_needs_no_appeal():
+    from state_graph.graphs.warranty_graph import build_graph, record_supplier_reply
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    paused = compiled.invoke(
+        tid,
+        {
+            "part_id": 4,
+            "user_id": 2,
+            "inventory_log_id": 1,
+            "claim_reason": "manufacturing defect in caliper mount, not wear",
+        },
+    )
+    assert paused.status == "paused_external"
+
+    resumed = record_supplier_reply(tid, "approved", note="Defect confirmed on inspection")
+    assert resumed.status == "completed"
+    assert resumed.state["final_status"] == "approved"
+
+
+def test_warranty_claim_rejection_triggers_hitl_appeal_above_threshold():
+    """Full loop: reject -> Tree-of-Thoughts appeal argument -> HITL
+    (claim value >= APPEAL_APPROVAL_THRESHOLD_USD) -> manager approves ->
+    second external wait -> supplier approves the appeal."""
+    from state_graph.graphs.warranty_graph import (
+        build_graph,
+        record_manager_decision,
+        record_supplier_reply,
+    )
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    paused = compiled.invoke(
+        tid,
+        {
+            "part_id": 4,
+            "user_id": 2,
+            "inventory_log_id": 1,
+            "claim_reason": "manufacturing defect in caliper mount, not wear",
+        },
+    )
+    assert paused.status == "paused_external"
+
+    rejected = record_supplier_reply(tid, "rejected", note="Photos inconclusive")
+    assert rejected.status == "paused_hitl"
+    assert rejected.state["appeal_argument"]
+
+    manager_approved = record_manager_decision(tid, True)
+    assert manager_approved.status == "paused_external"
+
+    final = record_supplier_reply(tid, "approved", note="Appeal accepted")
+    assert final.status == "completed"
+    assert final.state["final_status"] == "approved"
+
+
+def test_warranty_claim_manager_declines_appeal_cancels_thread():
+    from state_graph.graphs.warranty_graph import (
+        build_graph,
+        record_manager_decision,
+        record_supplier_reply,
+    )
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    compiled.invoke(
+        tid,
+        {
+            "part_id": 4,
+            "user_id": 2,
+            "inventory_log_id": 1,
+            "claim_reason": "manufacturing defect in caliper mount, not wear",
+        },
+    )
+    record_supplier_reply(tid, "rejected", note="Photos inconclusive")
+    final = record_manager_decision(tid, False)
+    assert final.status == "completed"
+    assert final.state["final_status"] == "appeal_cancelled"
+
+
+def test_warranty_claim_malformed_supplier_reply_files_a_ticket_not_a_retry():
+    """A supplier reply the graph can't parse is the "wrong resubmission
+    wastes the claim window" failure mode -- it must become a Ticket
+    (engine catches the raised ValueError), NOT get silently retried or
+    guessed at."""
+    from state_graph.graphs.warranty_graph import build_graph, record_supplier_reply
+    from state_graph.tickets import list_tickets
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    compiled.invoke(
+        tid,
+        {
+            "part_id": 4,
+            "user_id": 2,
+            "inventory_log_id": 1,
+            "claim_reason": "manufacturing defect",
+        },
+    )
+    result = record_supplier_reply(tid, "maybe-later??", note="unclear reply from portal")
+    assert result.status == "failed"
+    assert result.ticket_id is not None
+
+    open_tickets = [t for t in list_tickets(status="open") if t.thread_id == tid]
+    assert len(open_tickets) == 1
+    assert open_tickets[0].node_name == "submit_claim_to_supplier"
