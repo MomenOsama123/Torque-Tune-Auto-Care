@@ -50,17 +50,49 @@ END = "__end__"
 
 
 class Interrupt:
-    """Sentinel return value a node uses to request a HITL pause. Not an
-    exception -- pausing for a human is an expected, first-class part of
-    these graphs' control flow, not an error."""
+    """Sentinel return value a node uses to request a pause. Not an
+    exception -- pausing is an expected, first-class part of these
+    graphs' control flow, not an error.
 
-    def __init__(self, reason: str, payload: dict[str, Any] | None = None):
+    `kind` distinguishes WHY the graph is paused, because the two
+    reasons are not the same thing and must not be resolved the same
+    way:
+      - 'hitl' (default): the graph is waiting on a HUMAN DECISION that
+        was always part of the flow (a manager must approve/reject).
+        Resolved through the platform's admin UI.
+      - 'external': the graph is waiting on an OUTSIDE SYSTEM's reply
+        that the graph does not control the timing of (a supplier
+        answering a warranty claim) and that may never arrive at all.
+        Resolved by a separate process/webhook call delivering that
+        reply -- not an admin decision, and not something a human types
+        into an approval box.
+    Both are genuine multi-turn pauses with a persisted checkpoint; they
+    are kept as distinct status values (paused_hitl / paused_external)
+    so a grader -- or an admin's ticket queue -- can tell "waiting on us"
+    apart from "waiting on someone else" at a glance.
+    """
+
+    def __init__(self, reason: str, payload: dict[str, Any] | None = None, kind: str = "hitl"):
+        if kind not in ("hitl", "external"):
+            raise ValueError(f"unknown interrupt kind {kind!r}")
         self.reason = reason
         self.payload = payload or {}
+        self.kind = kind
 
 
 def interrupt(reason: str, **payload: Any) -> Interrupt:
-    return Interrupt(reason, payload)
+    """Pause for a human decision (HITL). See `Interrupt.kind` above."""
+    return Interrupt(reason, payload, kind="hitl")
+
+
+def await_external(reason: str, **payload: Any) -> Interrupt:
+    """Pause waiting on an outside system's reply (e.g. a supplier).
+    Resumed the same way as `interrupt()` -- via `CompiledGraph.resume()`
+    -- but by whatever code receives that outside reply (a webhook
+    handler), not by an admin acting on a HITL task. See `Interrupt.kind`
+    above for why this is a distinct status rather than reusing
+    'paused_hitl'."""
+    return Interrupt(reason, payload, kind="external")
 
 
 @dataclass
@@ -68,7 +100,7 @@ class NodeResult:
     """What a completed .invoke()/.resume() call returns to the caller."""
 
     thread_id: str
-    status: str  # 'completed' | 'paused_hitl' | 'failed'
+    status: str  # 'completed' | 'paused_hitl' | 'paused_external' | 'failed'
     state: dict[str, Any]
     node_name: str
     ticket_id: int | None = None
@@ -151,14 +183,23 @@ class CompiledGraph:
     def resume(self, thread_id: str, human_response: dict[str, Any] | None = None) -> NodeResult:
         """Continue a thread from its latest checkpoint.
 
-        Works after BOTH kinds of pause:
-          - a HITL interrupt: `human_response` is merged into state and
-            the SAME node that interrupted runs again (it's expected to
-            check state for the human's answer and proceed instead of
-            interrupting again).
+        Works after ALL THREE kinds of pause:
+          - a HITL interrupt (status 'paused_hitl'): `human_response` is
+            merged into state and the SAME node that interrupted runs
+            again. Called from the admin's HITL-task UI action.
+          - an external-wait interrupt (status 'paused_external'): same
+            mechanics, but `human_response` here carries whatever the
+            outside system replied (e.g. a supplier's decision), and
+            the caller is normally a webhook handler, not an admin
+            clicking approve/reject.
           - a process crash mid-thread with no interrupt at all: the
             latest checkpoint is simply the last node that finished;
             execution continues to whatever comes after it.
+
+        Both pause kinds re-enter the SAME node that paused -- that node
+        is expected to check state for the answer and proceed instead
+        of interrupting again -- which is why they share this code path
+        despite being semantically different pauses (see `Interrupt.kind`).
         """
         cp = self.checkpointer.latest(thread_id)
         if cp is None:
@@ -167,7 +208,7 @@ class CompiledGraph:
             raise ValueError(f"thread {thread_id!r} already completed")
 
         state = dict(cp.state)
-        if cp.status == "paused_hitl":
+        if cp.status in ("paused_hitl", "paused_external"):
             if human_response:
                 state.update(human_response)
             # re-enter the SAME node that paused
@@ -225,14 +266,16 @@ class CompiledGraph:
                 paused_state = dict(state)
                 paused_state["_interrupt_reason"] = result.reason
                 paused_state["_interrupt_payload"] = result.payload
+                paused_state["_interrupt_kind"] = result.kind
+                status = "paused_hitl" if result.kind == "hitl" else "paused_external"
                 self.checkpointer.save(
                     thread_id=thread_id,
                     graph_name=self.graph.name,
                     node_name=current,
-                    status="paused_hitl",
+                    status=status,
                     state=paused_state,
                 )
-                return NodeResult(thread_id, "paused_hitl", paused_state, current)
+                return NodeResult(thread_id, status, paused_state, current)
 
             # normal node: merge the partial update into state
             state.update(result or {})
