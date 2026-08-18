@@ -51,6 +51,34 @@ CREATE TABLE InventoryLogs (
     FOREIGN KEY (user_id) REFERENCES Users(id)
 );
 -- ---------------------------------------------------------
+-- Warranty Claims (Final Project -- state_graph/graphs/warranty_graph.py)
+-- ---------------------------------------------------------
+-- One row per claim submitted to a part's supplier. `status` tracks the
+-- graph's own state machine (not just success/fail): a claim spends real,
+-- possibly multi-day time in 'awaiting_supplier', can be rejected and then
+-- appealed once (`appeal_argument` + 'appealed' -> 'awaiting_supplier'
+-- again), and only ever reaches a terminal state through that loop -- this
+-- is why the claim is a state graph and not a single request/response call.
+CREATE TABLE WarrantyClaims (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    part_id INT NOT NULL,
+    user_id INT NOT NULL,
+    inventory_log_id INT NOT NULL,   -- which receipt this claim's warranty window is computed from
+    claim_code NVARCHAR(50) NOT NULL UNIQUE,
+    status NVARCHAR(30) NOT NULL DEFAULT 'submitted' CHECK (status IN (
+        'submitted', 'awaiting_supplier', 'approved', 'rejected',
+        'appealed', 'appeal_approved', 'appeal_rejected', 'cancelled'
+    )),
+    policy_check NVARCHAR(MAX) NULL,       -- RAG grounding result that established eligibility
+    appeal_argument NVARCHAR(MAX) NULL,    -- Tree-of-Thoughts-selected appeal argument, if any
+    supplier_response NVARCHAR(MAX) NULL,  -- raw reply captured when the external wait resolves
+    created_at DATETIME NOT NULL DEFAULT GETDATE(),
+    resolved_at DATETIME NULL,
+    FOREIGN KEY (part_id) REFERENCES SpareParts(id),
+    FOREIGN KEY (user_id) REFERENCES Users(id),
+    FOREIGN KEY (inventory_log_id) REFERENCES InventoryLogs(id)
+);
+-- ---------------------------------------------------------
 -- AI Agent Memory Tables (Added for Long-Term Persistence)
 -- ---------------------------------------------------------
 -- Stores significant events and actions (Promoted from Short-Term Memory)
