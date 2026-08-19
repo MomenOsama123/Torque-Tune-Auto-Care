@@ -20,17 +20,23 @@ Intelligent techniques embedded in the nodes:
     hardcoded rule.
   - Constrained ReAct: the node sequence itself is a reason -> act loop
     restricted to a fixed action set {check_policy, request_approval,
-    apply, reject} -- the graph's edges ARE the constraint (no action
-    outside that set is reachable), mirroring a Constrained ReAct
+    apply, reject, revise} -- the graph's edges ARE the constraint (no
+    action outside that set is reachable), mirroring a Constrained ReAct
     controller without needing a separate free-text ReAct prompt loop
     for what is fundamentally a small, auditable decision.
 
-Graph shape:
+Graph shape (bounded REAL CYCLE: a manager can counter-propose a smaller
+quantity instead of a flat reject, which loops back through validation
+and policy from scratch -- a smaller change may not even be sensitive
+anymore -- up to MAX_REVISION_ROUNDS times):
 
-    authorize_and_validate -*-> ground_in_policy -*-> apply_update -> log -> END
-                             \\-> apply_update (not sensitive)         \\
-                                                                        await_human_approval -*-> apply_update -> log -> END
-                                                                                               \\-> cancelled -> END
+    authorize_and_validate <----------------------------------------------+
+        -*-> ground_in_policy -*-> apply_update -> log_and_finish -> END  |
+         |    \\-> await_human_approval =(paused_hitl)=>                  |
+         |           -*-> apply_update -> log_and_finish -> END          |
+         |           |-> (revision proposed) apply_manager_revision -----+
+         |           \\-> (flat reject) cancelled -> END
+         \\-> apply_update (not sensitive)
 """
 
 from __future__ import annotations
@@ -51,6 +57,11 @@ from validation.validators import (
 )
 
 GRAPH_NAME = "inventory_approval"
+
+# Real cycle bound: a manager can counter-propose a revised quantity
+# instead of a flat reject, at most this many times, before the graph
+# insists on a final yes/no rather than negotiating indefinitely.
+MAX_REVISION_ROUNDS = 2
 
 
 def authorize_and_validate(state: dict) -> dict[str, Any]:
@@ -118,18 +129,50 @@ def _route_after_policy(state: dict) -> str:
 
 
 def await_human_approval(state: dict) -> Any:
-    if "approved" not in state:
+    """Fires once per revision round -- apply_manager_revision clears
+    'approved'/'revised_quantity' before looping back through
+    authorize_and_validate, so a manager who rejected round 1's
+    quantity is asked fresh about round 2's."""
+    if "approved" not in state and "revised_quantity" not in state:
         return interrupt(
             "manager_must_approve_sensitive_change",
             part_id=state["part_id"],
             elicitation_reason=state["elicitation_reason"],
             policy_check=state.get("policy_check"),
+            revision_round=state.get("revision_round", 0),
         )
     return {}
 
 
 def _route_after_approval(state: dict) -> str:
-    return "approved" if state.get("approved") else "rejected"
+    if state.get("approved"):
+        return "approved"
+    if state.get("revised_quantity") is not None and state.get("revision_round", 0) < MAX_REVISION_ROUNDS:
+        return "revise"
+    return "rejected"
+
+
+def apply_manager_revision(state: dict) -> dict[str, Any]:
+    """The real cycle step: instead of a flat reject, the manager
+    proposed a smaller/different quantity -- loop all the way back
+    through authorize_and_validate (and, if still sensitive,
+    ground_in_policy) with that number, since a smaller change may not
+    even count as sensitive anymore. Clears the per-round decision keys
+    so await_human_approval interrupts again on the next pass rather
+    than reusing this round's stale answer."""
+    revision_round = state.get("revision_round", 0) + 1
+    revised_quantity = state["revised_quantity"]
+    state.pop("approved", None)
+    state.pop("revised_quantity", None)
+    state.pop("sensitive", None)
+    state.pop("elicitation_reason", None)
+    state.pop("policy_check", None)
+    state.pop("policy_grounded", None)
+    state.pop("policy_exempts", None)
+    return {
+        "quantity": revised_quantity,
+        "revision_round": revision_round,
+    }
 
 
 def apply_update(state: dict) -> dict[str, Any]:
@@ -173,6 +216,7 @@ def build_graph() -> StateGraph:
     g.add_node("authorize_and_validate", authorize_and_validate)
     g.add_node("ground_in_policy", ground_in_policy)
     g.add_node("await_human_approval", await_human_approval)
+    g.add_node("apply_manager_revision", apply_manager_revision)
     g.add_node("apply_update", apply_update)
     g.add_node("log_and_finish", log_and_finish)
     g.add_node("cancelled", cancelled)
@@ -191,9 +235,33 @@ def build_graph() -> StateGraph:
     g.add_conditional_edges(
         "await_human_approval",
         _route_after_approval,
-        {"approved": "apply_update", "rejected": "cancelled"},
+        {"approved": "apply_update", "revise": "apply_manager_revision", "rejected": "cancelled"},
     )
+    # The real cycle edge: a revised quantity loops all the way back
+    # through validation, not forward to a terminal node.
+    g.add_edge("apply_manager_revision", "authorize_and_validate")
     g.add_edge("apply_update", "log_and_finish")
     g.add_edge("log_and_finish", END)
     g.add_edge("cancelled", END)
     return g
+
+
+# ---------------------------------------------------------------------
+# Entry point the platform calls from OUTSIDE any running graph process
+# ---------------------------------------------------------------------
+
+
+def record_manager_decision(
+    thread_id: str, approved: bool | None = None, revised_quantity: int | None = None
+) -> Any:
+    """What the platform's admin HITL-task UI calls when a manager acts
+    on a paused sensitive-change request: either approve/reject outright
+    (`approved=True/False`), or counter-propose a different quantity
+    (`revised_quantity=N`) -- which loops the thread back through
+    validation instead of ending it. Passing both is invalid; pass
+    exactly one."""
+    if (approved is None) == (revised_quantity is None):
+        raise ValueError("pass exactly one of approved= or revised_quantity=")
+    human_response = {"approved": approved} if approved is not None else {"revised_quantity": revised_quantity}
+    compiled = build_graph().compile()
+    return compiled.resume(thread_id, human_response=human_response)
