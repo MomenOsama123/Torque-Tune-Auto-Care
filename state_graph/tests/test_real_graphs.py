@@ -24,28 +24,124 @@ def _tid() -> str:
     return f"test-{uuid.uuid4().hex[:8]}"
 
 
-def test_fulfillment_graph_delay_path_completes_without_approval():
-    from state_graph.graphs.fulfillment_graph import build_graph
+def test_purchase_order_graph_below_threshold_auto_submits_no_hitl():
+    """A batch under PO_APPROVAL_THRESHOLD_USD should go straight to the
+    supplier without a manager pause."""
+    from state_graph.graphs.purchase_order_graph import build_graph, record_supplier_reply
 
     compiled = build_graph().compile()
-    result = compiled.invoke(
-        _tid(),
-        {"job_id": "9001", "required_parts": ["Timing Belt"]},  # discontinued, qty 0, no alt
+    tid = _tid()
+    # Lower the seeded NAPA batch below threshold by topping up quantity
+    # first, then create a small, cheap low-stock part instead.
+    conn = db.get_connection()
+    conn.execute("UPDATE SpareParts SET quantity = 10 WHERE part_number = 'BRK-002'")
+    conn.execute(
+        "INSERT INTO SpareParts (part_name, part_number, category_id, supplier_id, quantity, "
+        "price, location, minimum_stock, status) VALUES "
+        "('Cabin Air Filter', 'NAP-777', 1, 1, 1, 5.00, 'C1-01', 3, 'active')"
     )
-    assert result.status == "completed"
-    assert result.state["final_status"] == "notified"
+    conn.commit()
+    conn.close()
+
+    result = compiled.invoke(tid, {"user_id": 2})
+    assert result.status == "paused_external"
+    assert result.node_name == "submit_po_to_supplier"
+    assert result.state["current_batch"]["total_cost"] < 250.0
+
+    resumed = record_supplier_reply(tid, "confirmed", note="Ships next week")
+    assert resumed.status == "completed"
+    assert resumed.state["final_status"] == "completed"
 
 
-def test_fulfillment_graph_proceed_path_needs_no_approval():
-    from state_graph.graphs.fulfillment_graph import build_graph
+def test_purchase_order_graph_above_threshold_requires_hitl_then_confirms():
+    from state_graph.graphs.purchase_order_graph import (
+        build_graph,
+        record_manager_decision,
+        record_supplier_reply,
+    )
 
     compiled = build_graph().compile()
-    result = compiled.invoke(
-        _tid(),
-        {"job_id": "9002", "required_parts": ["Front Brake Pad Set"]},  # in stock (qty=8)
-    )
+    tid = _tid()
+    paused = compiled.invoke(tid, {"user_id": 2})  # seeded NAPA batch is $312, above $250
+    assert paused.status == "paused_hitl"
+    assert paused.node_name == "await_manager_po_approval"
+    assert paused.state["current_batch"]["total_cost"] >= 250.0
+
+    approved = record_manager_decision(tid, True)
+    assert approved.status == "paused_external"
+    assert approved.state["po_code"].startswith("PO-")
+
+    final = record_supplier_reply(tid, "confirmed", note="Ships in 5 business days")
+    assert final.status == "completed"
+    assert final.state["batch_results"] == [
+        {"supplier_name": "NAPA Distribution", "outcome": "confirmed"}
+    ]
+
+
+def test_purchase_order_graph_manager_declines_skips_batch():
+    from state_graph.graphs.purchase_order_graph import build_graph, record_manager_decision
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    compiled.invoke(tid, {"user_id": 2})
+    result = record_manager_decision(tid, False)
     assert result.status == "completed"
-    assert result.state["uses_alternative"] is False
+    assert result.state["batch_results"] == [
+        {"supplier_name": "NAPA Distribution", "outcome": "declined_by_manager"}
+    ]
+
+
+def test_purchase_order_graph_escalates_supplier_with_no_contact_email():
+    from state_graph.graphs.purchase_order_graph import (
+        build_graph,
+        record_manager_decision,
+        record_supplier_reply,
+    )
+
+    conn = db.get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO Suppliers (name) VALUES ('NoContact Parts Co.')")
+    sid = cur.lastrowid
+    cur.execute(
+        "INSERT INTO SpareParts (part_name, part_number, category_id, supplier_id, quantity, "
+        "price, location, minimum_stock, status) VALUES "
+        "('Widget', 'NCX-001', 1, ?, 1, 10.0, 'Z9-01', 5, 'active')",
+        (sid,),
+    )
+    conn.commit()
+    conn.close()
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    result = compiled.invoke(tid, {"user_id": 2})  # NAPA batch ($312) sorts first -> HITL
+    assert result.status == "paused_hitl"
+    result = record_manager_decision(tid, True)
+    assert result.status == "paused_external"
+    result = record_supplier_reply(tid, "confirmed", note="ok")
+    assert result.status == "completed"
+    outcomes = {r["supplier_name"]: r["outcome"] for r in result.state["batch_results"]}
+    assert outcomes["NoContact Parts Co."] == "escalated_missing_contact"
+
+
+def test_purchase_order_graph_malformed_supplier_reply_files_a_ticket():
+    from state_graph.graphs.purchase_order_graph import (
+        build_graph,
+        record_manager_decision,
+        record_supplier_reply,
+    )
+    from state_graph.tickets import list_tickets
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    compiled.invoke(tid, {"user_id": 2})
+    record_manager_decision(tid, True)
+    result = record_supplier_reply(tid, "idk-call-us-later", note="unclear")
+    assert result.status == "failed"
+    assert result.ticket_id is not None
+
+    open_tickets = [t for t in list_tickets(status="open") if t.thread_id == tid]
+    assert len(open_tickets) == 1
+    assert open_tickets[0].node_name == "submit_po_to_supplier"
 
 
 def test_inventory_approval_graph_pauses_for_sensitive_change_then_applies():
