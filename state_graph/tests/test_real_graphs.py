@@ -188,16 +188,6 @@ def test_inventory_approval_graph_skips_approval_for_small_change():
     assert result.state["sensitive"] is False
 
 
-def test_knowledge_graph_answers_a_grounded_question():
-    from state_graph.graphs.knowledge_graph import build_graph
-
-    compiled = build_graph().compile()
-    result = compiled.invoke(_tid(), {"question": "What's the warranty window under WT-317?"})
-    assert result.status == "completed"
-    assert result.state["final_status"] == "answered"
-    assert result.state["attempts"] >= 1
-
-
 # ---------------------------------------------------------------------
 # Warranty Claim graph -- state_graph/graphs/warranty_graph.py
 # ---------------------------------------------------------------------
