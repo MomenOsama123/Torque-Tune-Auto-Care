@@ -30,7 +30,7 @@ for path in (str(ROOT), str(MCP_SERVER_ROOT), str(AGENT_ROOT)):
 
 def wire_demo_database() -> None:
     import databases.db as db
-    from demo_db import build_demo_connection
+    from agent.demo_db import build_demo_connection
 
     db.get_connection = build_demo_connection
 
