@@ -7,12 +7,17 @@ state_graph/ adds:
     python state_graph/run_demo.py
 
 What it shows, in order:
-  1. Graph 1 (fulfillment): a job that resolves without needing approval.
+  1. Graph 1 (purchase_order): a supplier reorder batch that clears the
+     manager-approval threshold, waits for the supplier to confirm, and
+     completes -- Task Decomposition (per-supplier batching) +
+     Constrained ReAct (bounded verify/draft/escalate action set).
   2. Graph 2 (inventory_approval): a sensitive change that PAUSES for a
      manager (HITL), grounded in real company policy via RAG, then is
      resumed and actually applied to the database.
-  3. Graph 3 (knowledge_qa): a warranty question answered from the real
-     knowledge base.
+  3. Graph 3 (warranty_claim): a claim that gets rejected, generates a
+     Tree-of-Thoughts appeal argument, pauses for manager approval above
+     a dollar threshold (HITL), then is resent and approved -- RAG
+     Architecture (policy grounding) + Tree of Thoughts (appeal choice).
   4. A live Crash-and-Resume: starts a thread, then simulates the
      process dying immediately after the first checkpoint by throwing
      away the in-memory graph object and rebuilding everything from
@@ -41,18 +46,29 @@ def _setup() -> None:
     db.get_connection = demo_db.build_demo_connection
 
 
-def demo_fulfillment() -> None:
-    from state_graph.graphs.fulfillment_graph import build_graph
-
-    print("\n=== Graph 1: Fulfillment (Task Decomposition + Tree of Thoughts/LATS) ===")
-    compiled = build_graph().compile()
-    result = compiled.invoke(
-        "demo-fulfillment-1",
-        {"job_id": "7001", "required_parts": ["Front Brake Pad Set"]},
+def demo_purchase_order() -> None:
+    from state_graph.graphs.purchase_order_graph import (
+        build_graph,
+        record_manager_decision,
+        record_supplier_reply,
     )
-    print(f"status={result.status} node={result.node_name}")
-    print(f"decision={result.state.get('decision')}")
-    print(f"final_status={result.state.get('final_status')}")
+
+    print("\n=== Graph 1: Purchase Order (Task Decomposition + Constrained ReAct) ===")
+    compiled = build_graph().compile()
+    thread_id = "demo-purchase-order-1"
+    paused = compiled.invoke(thread_id, {"user_id": 2})
+    print(f"status={paused.status} node={paused.node_name}")
+    if paused.status == "paused_hitl":
+        batch = paused.state["current_batch"]
+        print(f"  HITL: ${batch['total_cost']} PO for {batch['supplier_name']} needs manager sign-off")
+        print("  [manager approves]")
+        paused = record_manager_decision(thread_id, True)
+        print(f"status={paused.status} node={paused.node_name}")
+    print(f"  -- PO {paused.state.get('po_code')} sent; thread paused on disk awaiting supplier --")
+    print("  [supplier confirms]")
+    resumed = record_supplier_reply(thread_id, "confirmed", note="Ships in 5 business days")
+    print(f"status={resumed.status} node={resumed.node_name}")
+    print(f"  batch_results={resumed.state.get('batch_results')}")
 
 
 def demo_inventory_approval() -> None:
@@ -76,37 +92,69 @@ def demo_inventory_approval() -> None:
     print(f"  update_result={resumed.state.get('update_result')}")
 
 
-def demo_knowledge_qa() -> None:
-    from state_graph.graphs.knowledge_graph import build_graph
+def demo_warranty_claim() -> None:
+    from state_graph.graphs.warranty_graph import (
+        build_graph,
+        record_manager_decision,
+        record_supplier_reply,
+    )
 
-    print("\n=== Graph 3: Knowledge Q&A (RAG Architecture + Constrained-ReAct agentic retry) ===")
+    print("\n=== Graph 3: Warranty Claim (RAG Architecture + Tree of Thoughts) ===")
     compiled = build_graph().compile()
-    result = compiled.invoke("demo-knowledge-1", {"question": "What's the warranty window under WT-317?"})
-    print(f"status={result.status} attempts={result.state.get('attempts')}")
-    print(f"answer={result.state.get('answer')}")
+    thread_id = "demo-warranty-1"
+    paused = compiled.invoke(
+        thread_id,
+        {
+            "part_id": 4,
+            "user_id": 2,
+            "inventory_log_id": 1,
+            "claim_reason": "manufacturing defect in caliper mount, not wear",
+        },
+    )
+    print(f"status={paused.status} node={paused.node_name}")
+    print(f"  claim_code={paused.state.get('claim_code')}  policy_eligible={paused.state.get('policy_eligible')}")
+    print("  -- thread paused on disk; supplier may take days to answer --")
+
+    print("  [supplier rejects the first submission]")
+    rejected = record_supplier_reply(thread_id, "rejected", note="Photos inconclusive")
+    print(f"status={rejected.status} node={rejected.node_name}")
+    print(f"  Tree-of-Thoughts appeal argument chosen: {rejected.state.get('appeal_argument')}")
+
+    if rejected.status == "paused_hitl":
+        print(f"  HITL: appeal for ${rejected.state['price']} claim needs manager sign-off before resending")
+        print("  [manager approves]")
+        rejected = record_manager_decision(thread_id, True)
+        print(f"status={rejected.status} node={rejected.node_name}")
+
+    print("  [supplier approves the appeal]")
+    final = record_supplier_reply(thread_id, "approved", note="Appeal accepted")
+    print(f"status={final.status} node={final.node_name} final_status={final.state.get('final_status')}")
 
 
 def demo_crash_and_resume() -> None:
-    from state_graph.graphs.fulfillment_graph import build_graph, decompose
+    from state_graph.graphs.purchase_order_graph import build_graph, decompose_into_supplier_batches
 
     print("\n=== Live Crash-and-Resume ===")
     thread_id = "demo-crash-1"
 
     # Simulate "process 1": run only the first node, checkpoint it, then
     # stop -- as if the process died right here.
-    state = {"thread_id": thread_id, "job_id": "7002", "required_parts": ["Front Brake Pad Set"]}
-    state.update(decompose(state))
+    state = {"thread_id": thread_id, "user_id": 2}
+    state.update(decompose_into_supplier_batches(state))
     Checkpointer().save(
-        thread_id=thread_id, graph_name="fulfillment", node_name="decompose", status="running", state=state
+        thread_id=thread_id,
+        graph_name="purchase_order",
+        node_name="decompose_into_supplier_batches",
+        status="running",
+        state=state,
     )
-    print("  [process 1] ran 'decompose', checkpointed, then crashed (simulated)")
+    print("  [process 1] ran 'decompose_into_supplier_batches', checkpointed, then crashed (simulated)")
     del state  # nothing left in memory from "process 1"
 
     # "process 2": nothing but the thread_id and a fresh graph object.
     compiled = build_graph().compile()
     result = compiled.resume(thread_id)
     print(f"  [process 2] resumed -> status={result.status} node={result.node_name}")
-    print(f"  [process 2] final decision={result.state.get('decision')}")
     print("  see state_graph/tests/test_crash_resume.py for the same proof across a real os.kill'd process")
 
 
@@ -133,9 +181,9 @@ def demo_failure_ticket() -> None:
 
 def main() -> None:
     _setup()
-    demo_fulfillment()
+    demo_purchase_order()
     demo_inventory_approval()
-    demo_knowledge_qa()
+    demo_warranty_claim()
     demo_crash_and_resume()
     demo_failure_ticket()
     print("\nAll demos completed.")
