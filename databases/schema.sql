@@ -79,6 +79,34 @@ CREATE TABLE WarrantyClaims (
     FOREIGN KEY (inventory_log_id) REFERENCES InventoryLogs(id)
 );
 -- ---------------------------------------------------------
+-- Purchase Orders (Final Project -- state_graph/graphs/purchase_order_graph.py)
+-- ---------------------------------------------------------
+-- One row per REORDER BATCH: all currently-low-stock parts from a single
+-- supplier, grouped into one purchase order by that graph's Task
+-- Decomposition node. `status` tracks the graph's own state machine --
+-- a PO spends real, possibly multi-day time in 'awaiting_supplier'
+-- (confirming price/lead time before it becomes a firm commitment), and
+-- can require a manager's sign-off ('pending_approval') before it is
+-- ever sent, since a confirmed PO commits real cash before the parts
+-- arrive.
+CREATE TABLE PurchaseOrders (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    supplier_id INT NOT NULL,
+    requested_by_user_id INT NOT NULL,
+    po_code NVARCHAR(50) NOT NULL UNIQUE,
+    line_items NVARCHAR(MAX) NOT NULL,   -- JSON: [{part_id, part_number, quantity, unit_price}]
+    total_cost DECIMAL(10,2) NOT NULL,
+    status NVARCHAR(30) NOT NULL DEFAULT 'draft' CHECK (status IN (
+        'draft', 'pending_approval', 'awaiting_supplier',
+        'confirmed', 'rejected', 'cancelled'
+    )),
+    supplier_response NVARCHAR(MAX) NULL,
+    created_at DATETIME NOT NULL DEFAULT GETDATE(),
+    resolved_at DATETIME NULL,
+    FOREIGN KEY (supplier_id) REFERENCES Suppliers(id),
+    FOREIGN KEY (requested_by_user_id) REFERENCES Users(id)
+);
+-- ---------------------------------------------------------
 -- AI Agent Memory Tables (Added for Long-Term Persistence)
 -- ---------------------------------------------------------
 -- Stores significant events and actions (Promoted from Short-Term Memory)
