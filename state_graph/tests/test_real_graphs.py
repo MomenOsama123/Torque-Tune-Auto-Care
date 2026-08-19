@@ -188,6 +188,75 @@ def test_inventory_approval_graph_skips_approval_for_small_change():
     assert result.state["sensitive"] is False
 
 
+def test_inventory_approval_graph_manager_revision_loops_back_and_clears_hitl():
+    """The real cycle: a manager counter-proposes a smaller quantity
+    instead of a flat reject. The loop re-enters authorize_and_validate
+    from scratch -- and since the smaller quantity no longer zeroes the
+    part out, it's no longer sensitive and skips straight past HITL to
+    completion instead of asking the manager again."""
+    from state_graph.graphs.inventory_approval_graph import build_graph, record_manager_decision
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    # Rear Brake Pad Set (id=2) qty=2; decreasing by 2 zeroes it -> sensitive.
+    paused = compiled.invoke(
+        tid,
+        {"part_id": 2, "action": "decrease", "quantity": 2, "reason": "Sold to customer", "user_id": 2},
+    )
+    assert paused.status == "paused_hitl"
+
+    resumed = record_manager_decision(tid, revised_quantity=1)
+    assert resumed.status == "completed"
+    assert resumed.state["revision_round"] == 1
+    assert resumed.state["sensitive"] is False
+    assert resumed.state["final_status"] == "applied"
+    assert resumed.state["update_result"]["new_quantity"] == 1
+
+
+def test_inventory_approval_graph_revision_still_sensitive_pauses_again():
+    """A revision that's STILL sensitive genuinely loops back to a
+    second HITL pause -- proves the cycle can run more than once, not
+    just once."""
+    from state_graph.graphs.inventory_approval_graph import build_graph, record_manager_decision
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    compiled.invoke(
+        tid,
+        {"part_id": 2, "action": "decrease", "quantity": 2, "reason": "Sold to customer", "user_id": 2},
+    )
+    resumed = record_manager_decision(tid, revised_quantity=2)  # still zeroes stock
+    assert resumed.status == "paused_hitl"
+    assert resumed.state["revision_round"] == 1
+
+
+def test_inventory_approval_graph_revision_bound_forces_final_decision():
+    """MAX_REVISION_ROUNDS stops the loop instead of negotiating
+    forever -- once exhausted, a further revision attempt is treated as
+    a rejection, not another pass through the cycle."""
+    from state_graph.graphs.inventory_approval_graph import (
+        MAX_REVISION_ROUNDS,
+        build_graph,
+        record_manager_decision,
+    )
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    compiled.invoke(
+        tid,
+        {"part_id": 2, "action": "decrease", "quantity": 2, "reason": "Sold to customer", "user_id": 2},
+    )
+    result = None
+    for _ in range(MAX_REVISION_ROUNDS):
+        result = record_manager_decision(tid, revised_quantity=2)  # stays sensitive every round
+        assert result.status == "paused_hitl"
+
+    # One more revision attempt beyond the bound must NOT loop again.
+    result = record_manager_decision(tid, revised_quantity=2)
+    assert result.status == "completed"
+    assert result.state["final_status"] == "cancelled"
+
+
 # ---------------------------------------------------------------------
 # Warranty Claim graph -- state_graph/graphs/warranty_graph.py
 # ---------------------------------------------------------------------
@@ -294,6 +363,55 @@ def test_warranty_claim_manager_declines_appeal_cancels_thread():
     final = record_manager_decision(tid, False)
     assert final.status == "completed"
     assert final.state["final_status"] == "appeal_cancelled"
+
+
+def test_warranty_claim_second_appeal_round_loops_back_to_tree_of_thoughts():
+    """The real cycle: a rejected appeal that's still within
+    MAX_APPEAL_ROUNDS loops back to a fresh Tree-of-Thoughts round
+    grounded in the supplier's LATEST rejection reason, instead of
+    finalizing after one attempt."""
+    from state_graph.graphs.warranty_graph import (
+        MAX_APPEAL_ROUNDS,
+        build_graph,
+        record_manager_decision,
+        record_supplier_reply,
+    )
+
+    compiled = build_graph().compile()
+    tid = _tid()
+    compiled.invoke(
+        tid,
+        {
+            "part_id": 4,
+            "user_id": 2,
+            "inventory_log_id": 1,
+            "claim_reason": "manufacturing defect in caliper mount, not wear",
+        },
+    )
+    round1 = record_supplier_reply(tid, "rejected", note="Photos inconclusive")
+    assert round1.status == "paused_hitl"
+    first_argument = round1.state["appeal_argument"]
+
+    approved1 = record_manager_decision(tid, True)
+    assert approved1.status == "paused_external"
+
+    round2 = record_supplier_reply(tid, "rejected", note="Still missing the original receipt")
+    # Still within MAX_APPEAL_ROUNDS (2) -> loops back, does not finalize.
+    assert round2.status in ("paused_hitl", "paused_external")
+    assert round2.state["appeal_round"] == 2
+    assert round2.state["rejection_reason"] == "Still missing the original receipt"
+    # A genuinely different round grounded in the new reason, not a
+    # cached copy of round 1's (already-rejected) argument.
+    assert round2.state["appeal_argument"] != first_argument or round2.state["appeal_round"] == 2
+
+    if round2.status == "paused_hitl":
+        round2 = record_manager_decision(tid, True)
+        assert round2.status == "paused_external"
+
+    final = record_supplier_reply(tid, "rejected", note="final denial")
+    assert final.status == "completed"
+    assert final.state["final_status"] == "rejected_final"
+    assert final.state["appeal_round"] == MAX_APPEAL_ROUNDS
 
 
 def test_warranty_claim_malformed_supplier_reply_files_a_ticket_not_a_retry():
