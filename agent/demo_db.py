@@ -28,7 +28,9 @@ CREATE TABLE Categories (
 
 CREATE TABLE Suppliers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT
 );
 
 CREATE TABLE SpareParts (
@@ -91,6 +93,27 @@ CREATE TABLE WarrantyClaims (
     FOREIGN KEY (inventory_log_id) REFERENCES InventoryLogs(id)
 );
 
+-- Purchase Orders (Final Project -- state_graph/graphs/purchase_order_graph.py).
+-- Mirrors databases/schema.sql's PurchaseOrders. One row per per-supplier
+-- reorder batch that graph's Task Decomposition node builds.
+CREATE TABLE PurchaseOrders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL,
+    requested_by_user_id INTEGER NOT NULL,
+    po_code TEXT NOT NULL UNIQUE,
+    line_items TEXT NOT NULL,
+    total_cost REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN (
+        'draft', 'pending_approval', 'awaiting_supplier',
+        'confirmed', 'rejected', 'cancelled'
+    )),
+    supplier_response TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME,
+    FOREIGN KEY (supplier_id) REFERENCES Suppliers(id),
+    FOREIGN KEY (requested_by_user_id) REFERENCES Users(id)
+);
+
 -- ---------------------------------------------------------
 -- AI Agent Memory Tables (mirrors databases/schema.sql's
 -- EpisodicMemory / SemanticMemory, translated to SQLite so the
@@ -124,7 +147,9 @@ INSERT INTO Users (name, email, role) VALUES
 
 INSERT INTO Categories (name) VALUES ('Brakes'), ('Engine');
 
-INSERT INTO Suppliers (name) VALUES ('NAPA Distribution'), ('TorqueParts Direct');
+INSERT INTO Suppliers (name, email) VALUES
+    ('NAPA Distribution', 'orders@napadistribution.example'),
+    ('TorqueParts Direct', 'claims@torquepartsdirect.example');
 
 INSERT INTO SpareParts
     (part_name, part_number, category_id, supplier_id, quantity, price, location, minimum_stock, status)
