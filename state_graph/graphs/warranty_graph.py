@@ -43,28 +43,32 @@ Intelligent techniques embedded in the nodes:
 
 Human-in-the-loop: `await_manager_approval_for_appeal` is a real HITL
 node -- a manager must approve any appeal above a defensible dollar
-threshold before it goes back out, because a resubmission is a second
-and final chance at recovering that money. This is a genuine "amount
-above a threshold" condition, and it is a DIFFERENT pause (paused_hitl)
-from the external-wait pauses around it (paused_external) -- see
+threshold before it goes back out, every round (a manager approving
+round 1 does not pre-approve round 2). This is a genuine "amount above
+a threshold" condition, and it is a DIFFERENT pause (paused_hitl) from
+the external-wait pauses around it (paused_external) -- see
 state_graph/engine.py's `Interrupt.kind` for why the two are not
 conflated.
 
-Graph shape:
+Graph shape (bounded REAL CYCLE: a rejected appeal that's still within
+MAX_APPEAL_ROUNDS loops back into Tree-of-Thoughts with the supplier's
+latest stated reason, instead of a single one-shot appeal):
 
     authorize_and_check_eligibility -> ground_in_warranty_policy -*-> submit_claim_to_supplier
                                                                     \\-> not_eligible -> END
 
     submit_claim_to_supplier =(paused_external, resumed by record_supplier_reply)=>
         -*-> finalize_approved -> END
-         \\-> choose_appeal_argument -*-> resubmit_appeal_to_supplier -> ... (loop back to a wait)
-                                       \\-> await_manager_approval_for_appeal =(paused_hitl)=>
-                                              -*-> resubmit_appeal_to_supplier
-                                               \\-> cancelled_by_manager -> END
-
+         \\-> choose_appeal_argument <-------------------------------------------+
+                -*-> resubmit_appeal_to_supplier -----------------------+        |
+                 \\-> await_manager_approval_for_appeal =(paused_hitl)=>|        |
+                        -*-> resubmit_appeal_to_supplier ---------------+        |
+                         \\-> cancelled_by_manager -> END                        |
+                                                                                  |
     resubmit_appeal_to_supplier =(paused_external, resumed by record_supplier_reply)=>
         -*-> finalize_approved -> END
-         \\-> finalize_rejected -> END   (one appeal only -- no second loop)
+         |-> (rejected, appeal_round < MAX_APPEAL_ROUNDS) prepare_next_appeal_round -+
+         \\-> (rejected, appeal_round >= MAX_APPEAL_ROUNDS) finalize_rejected -> END
 """
 
 from __future__ import annotations
@@ -88,6 +92,13 @@ GRAPH_NAME = "warranty_claim"
 # is the concrete, defensible "amount above a threshold" HITL condition
 # the project brief requires in writing.
 APPEAL_APPROVAL_THRESHOLD_USD = 50.00
+
+# Real cycle: a rejected appeal is not automatically the end -- the
+# supplier's stated reason for rejecting THIS appeal becomes the input
+# to a fresh Tree-of-Thoughts round, up to this many rounds. Bounded (not
+# unlimited) so a stuck back-and-forth still terminates in a Ticket-free,
+# defensible way rather than looping forever.
+MAX_APPEAL_ROUNDS = 2
 
 # Claims older than this are outside every supplier's window in
 # supplier_warranty_terms.md even before the RAG check runs -- lets the
@@ -391,9 +402,12 @@ def _route_after_appeal_choice(state: dict) -> str:
 def await_manager_approval_for_appeal(state: dict) -> Any:
     """Real HITL node: a claim value at/above APPEAL_APPROVAL_THRESHOLD_USD
     is a defensible, written-down bar -- above it, a manager (not the
-    agent) decides whether this last, one-shot resubmission is worth
-    sending. Distinct pause kind from submit_claim_to_supplier's wait:
-    this one is waiting on OUR manager, not the supplier."""
+    agent) decides whether THIS round's resubmission is worth sending.
+    Fires again on every appeal round (prepare_next_appeal_round clears
+    'manager_approved' before looping back here) -- a manager approving
+    round 1 does not pre-approve round 2. Distinct pause kind from
+    submit_claim_to_supplier's wait: this one is waiting on OUR manager,
+    not the supplier."""
     if "manager_approved" not in state:
         return interrupt(
             "manager_must_approve_appeal_resubmission",
@@ -401,6 +415,7 @@ def await_manager_approval_for_appeal(state: dict) -> Any:
             price=state["price"],
             appeal_argument=state["appeal_argument"],
             rejection_reason=state["rejection_reason"],
+            appeal_round=state.get("appeal_round", 1),
         )
     return {}
 
@@ -428,9 +443,12 @@ def cancelled_by_manager(state: dict) -> dict[str, Any]:
 
 
 def resubmit_appeal_to_supplier(state: dict) -> Any:
-    """Second (and final -- see graph shape) external wait, same pattern
-    as submit_claim_to_supplier but marks the claim 'appealed' first so
-    the two waits are distinguishable in WarrantyClaims.status."""
+    """External wait, same pattern as submit_claim_to_supplier but marks
+    the claim 'appealed' first so the two waits are distinguishable in
+    WarrantyClaims.status. Re-entered fresh on every appeal round (not
+    via resume()) -- 'appeal_supplier_response' from a PRIOR round must
+    be cleared by prepare_next_appeal_round before looping back here, or
+    this would mistake a stale reply for a new one."""
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -446,6 +464,7 @@ def resubmit_appeal_to_supplier(state: dict) -> Any:
                 "awaiting_supplier_appeal_decision",
                 claim_code=state["claim_code"],
                 appeal_argument=state["appeal_argument"],
+                appeal_round=state.get("appeal_round", 1),
             )
 
         reply = state.get("appeal_supplier_response")
@@ -464,7 +483,10 @@ def resubmit_appeal_to_supplier(state: dict) -> Any:
             (final_status, reply.get("note", ""), state["claim_code"]),
         )
         conn.commit()
-        return {"appeal_decision": final_status}
+        return {
+            "appeal_decision": final_status,
+            "latest_appeal_rejection_reason": reply.get("note", ""),
+        }
     finally:
         try:
             conn.close()
@@ -473,7 +495,29 @@ def resubmit_appeal_to_supplier(state: dict) -> Any:
 
 
 def _route_after_appeal_submission(state: dict) -> str:
-    return "approved" if state.get("appeal_decision") == "appeal_approved" else "rejected"
+    if state.get("appeal_decision") == "appeal_approved":
+        return "approved"
+    if state.get("appeal_round", 1) < MAX_APPEAL_ROUNDS:
+        return "retry"
+    return "rejected"
+
+
+def prepare_next_appeal_round(state: dict) -> dict[str, Any]:
+    """The real cycle step: the supplier rejected THIS appeal too, but
+    we're still within MAX_APPEAL_ROUNDS -- loop back to a fresh
+    Tree-of-Thoughts round grounded in the supplier's LATEST stated
+    reason (not the original one, which this argument already tried and
+    failed to rebut), instead of giving up after one attempt. Clears
+    every per-round key so the next pass through
+    await_manager_approval_for_appeal / resubmit_appeal_to_supplier
+    doesn't mistake this round's leftovers for a fresh one."""
+    state.pop("appeal_supplier_response", None)
+    state.pop("appeal_decision", None)
+    state.pop("manager_approved", None)
+    return {
+        "rejection_reason": state.get("latest_appeal_rejection_reason") or state["rejection_reason"],
+        "appeal_round": state.get("appeal_round", 1) + 1,
+    }
 
 
 def finalize_approved(state: dict) -> dict[str, Any]:
@@ -492,8 +536,9 @@ def finalize_approved(state: dict) -> dict[str, Any]:
 def finalize_rejected(state: dict) -> dict[str, Any]:
     memory_manager.add_interaction(
         "assistant",
-        f"Warranty claim {state.get('claim_code')} rejected after appeal -- no further "
-        "resubmission (one appeal only).",
+        f"Warranty claim {state.get('claim_code')} rejected after "
+        f"{state.get('appeal_round', 1)} appeal round(s) -- no further resubmission "
+        f"(MAX_APPEAL_ROUNDS={MAX_APPEAL_ROUNDS}).",
     )
     return {"final_status": "rejected_final"}
 
@@ -508,6 +553,7 @@ def build_graph() -> StateGraph:
     g.add_node("await_manager_approval_for_appeal", await_manager_approval_for_appeal)
     g.add_node("cancelled_by_manager", cancelled_by_manager)
     g.add_node("resubmit_appeal_to_supplier", resubmit_appeal_to_supplier)
+    g.add_node("prepare_next_appeal_round", prepare_next_appeal_round)
     g.add_node("finalize_approved", finalize_approved)
     g.add_node("finalize_rejected", finalize_rejected)
 
@@ -549,8 +595,15 @@ def build_graph() -> StateGraph:
     g.add_conditional_edges(
         "resubmit_appeal_to_supplier",
         _route_after_appeal_submission,
-        {"approved": "finalize_approved", "rejected": "finalize_rejected"},
+        {
+            "approved": "finalize_approved",
+            "retry": "prepare_next_appeal_round",
+            "rejected": "finalize_rejected",
+        },
     )
+    # The real cycle edge: a still-within-budget rejected appeal loops
+    # back into Tree-of-Thoughts, not forward to a terminal node.
+    g.add_edge("prepare_next_appeal_round", "choose_appeal_argument")
     g.add_edge("finalize_rejected", END)
     return g
 
