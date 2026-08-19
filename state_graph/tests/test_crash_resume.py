@@ -3,7 +3,7 @@ Crash-and-Resume test (Execution Roadmap requirement, Phase 3): proves
 recovery across a REAL killed process, not just a resume() call in the
 same Python session.
 
-Strategy: a subprocess runs one of the real graphs (fulfillment_graph)
+Strategy: a subprocess runs one of the real graphs (purchase_order_graph)
 just past its first node's checkpoint, then calls `os.kill(getpid(),
 SIGKILL)` on itself -- an actual unrecoverable crash, not
 sys.exit()/an exception the subprocess could clean up after. The parent
@@ -34,29 +34,28 @@ _CRASH_SCRIPT = textwrap.dedent(
     import databases.db as db
     db.get_connection = demo_db.build_demo_connection
 
-    from state_graph.graphs.fulfillment_graph import build_graph
+    from state_graph.graphs.purchase_order_graph import build_graph
 
     graph = build_graph().compile()
 
     # Run the entry node manually and checkpoint it (mirrors what
     # CompiledGraph.invoke does internally for the first node), then kill
-    # this process immediately -- BEFORE execute_tasks or plan_decision
-    # ever run in this process.
-    from state_graph.graphs.fulfillment_graph import decompose
+    # this process immediately -- BEFORE process_next_batch or any later
+    # node ever runs in this process.
+    from state_graph.graphs.purchase_order_graph import decompose_into_supplier_batches
 
     state = {{
         "thread_id": {thread_id!r},
-        "job_id": "9001",
-        "required_parts": ["Front Brake Pad Set"],
+        "user_id": 2,
     }}
-    update = decompose(state)
+    update = decompose_into_supplier_batches(state)
     state.update(update)
 
     from state_graph.checkpointer import Checkpointer
     Checkpointer().save(
         thread_id={thread_id!r},
-        graph_name="fulfillment",
-        node_name="decompose",
+        graph_name="purchase_order",
+        node_name="decompose_into_supplier_batches",
         status="running",
         state=state,
     )
@@ -76,18 +75,18 @@ _RESUME_SCRIPT = textwrap.dedent(
     import databases.db as db
     db.get_connection = demo_db.build_demo_connection
 
-    from state_graph.graphs.fulfillment_graph import build_graph
+    from state_graph.graphs.purchase_order_graph import build_graph
     from state_graph.checkpointer import Checkpointer
 
     graph = build_graph().compile()
 
     history_before = Checkpointer().history({thread_id!r})
-    assert [c.node_name for c in history_before] == ["decompose"], history_before
+    assert [c.node_name for c in history_before] == ["decompose_into_supplier_batches"], history_before
 
     result = graph.resume({thread_id!r})
     print("RESUME_STATUS", result.status)
     print("RESUME_NODE", result.node_name)
-    print("RESUME_HAS_DECISION", "decision" in result.state or result.status == "paused_hitl")
+    print("RESUME_HAS_BATCHES", "batches" in result.state)
     """
 )
 
@@ -118,4 +117,4 @@ def test_crash_and_resume_across_real_processes():
     )
     assert resumed.returncode == 0, resumed.stderr
     assert "RESUME_STATUS completed" in resumed.stdout or "RESUME_STATUS paused_hitl" in resumed.stdout
-    assert "RESUME_HAS_DECISION True" in resumed.stdout
+    assert "RESUME_HAS_BATCHES True" in resumed.stdout
