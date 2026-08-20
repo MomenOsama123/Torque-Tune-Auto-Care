@@ -24,7 +24,7 @@ from typing import Any
 
 from state_graph.db import get_connection
 
-TERMINAL_STATUSES = {"completed", "failed"}
+TERMINAL_STATUSES = {"completed", "failed", "halted"}
 
 
 @dataclass
