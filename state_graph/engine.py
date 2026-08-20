@@ -95,12 +95,38 @@ def await_external(reason: str, **payload: Any) -> Interrupt:
     return Interrupt(reason, payload, kind="external")
 
 
+class HardStop(Exception):
+    """Raised by a node to trigger a TRUE HITL hard-stop for a
+    safety-critical condition.
+
+    This is deliberately NOT an `Interrupt`. `interrupt()`/`await_external()`
+    are expected, resumable pauses -- the graph WILL continue once a
+    decision/reply arrives via `CompiledGraph.resume()`. A `HardStop` is the
+    opposite: the graph must never be allowed to proceed past this point
+    through the normal `resume()` flow again, no matter what a human types
+    into an approval box. It is also not a plain unexpected exception
+    (-> Failure Ticket, status 'failed') -- a failed thread is expected to
+    be fixed and resumed once a human resolves the ticket; a hard-stopped
+    thread is a terminal, permanent halt on purpose.
+
+    The engine still files a Ticket for the audit trail (same persistence
+    the Failure Ticket system already uses), but checkpoints the thread
+    with the distinct terminal status 'halted', which `CompiledGraph.resume()`
+    refuses to touch under any circumstances.
+    """
+
+    def __init__(self, reason: str, payload: dict[str, Any] | None = None):
+        self.reason = reason
+        self.payload = payload or {}
+        super().__init__(reason)
+
+
 @dataclass
 class NodeResult:
     """What a completed .invoke()/.resume() call returns to the caller."""
 
     thread_id: str
-    status: str  # 'completed' | 'paused_hitl' | 'paused_external' | 'failed'
+    status: str  # 'completed' | 'paused_hitl' | 'paused_external' | 'failed' | 'halted'
     state: dict[str, Any]
     node_name: str
     ticket_id: int | None = None
@@ -206,6 +232,14 @@ class CompiledGraph:
             raise ValueError(f"no checkpoints found for thread {thread_id!r}")
         if cp.status == "completed":
             raise ValueError(f"thread {thread_id!r} already completed")
+        if cp.status == "halted":
+            raise ValueError(
+                f"thread {thread_id!r} hit a HARD-STOP at node {cp.node_name!r} "
+                f"(reason: {cp.state.get('_hard_stop_reason')!r}) and cannot be "
+                "continued through the normal resume() flow. This is a permanent "
+                "halt, not a HITL pause -- it requires out-of-band review, not an "
+                "approval decision."
+            )
 
         state = dict(cp.state)
         if cp.status in ("paused_hitl", "paused_external"):
@@ -244,6 +278,30 @@ class CompiledGraph:
 
             try:
                 result = fn(state)
+            except HardStop as exc:
+                # A safety-critical condition, NOT a normal failure and NOT a
+                # resumable pause. Still filed as a Ticket for the audit
+                # trail (reusing the existing ticket system rather than a
+                # second one), but checkpointed with a distinct terminal
+                # status that resume() permanently refuses.
+                halted_state = dict(state)
+                halted_state["_hard_stop_reason"] = exc.reason
+                halted_state["_hard_stop_payload"] = exc.payload
+                ticket = file_ticket(
+                    thread_id=thread_id,
+                    graph_name=self.graph.name,
+                    node_name=current,
+                    exc=exc,
+                    state_snapshot=halted_state,
+                )
+                self.checkpointer.save(
+                    thread_id=thread_id,
+                    graph_name=self.graph.name,
+                    node_name=current,
+                    status="halted",
+                    state=halted_state,
+                )
+                return NodeResult(thread_id, "halted", halted_state, current, ticket_id=ticket.id)
             except Exception as exc:  # noqa: BLE001 -- deliberately broad: any
                 # node bug becomes a ticket, not a crashed process.
                 ticket = file_ticket(
