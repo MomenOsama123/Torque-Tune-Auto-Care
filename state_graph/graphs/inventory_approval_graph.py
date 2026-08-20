@@ -45,7 +45,7 @@ import asyncio
 from typing import Any
 
 from state_graph.bootstrap import GraphContext, memory_manager, server
-from state_graph.engine import END, StateGraph, interrupt
+from state_graph.engine import END, HardStop, StateGraph, interrupt
 
 from databases.db import get_connection
 from validation.validators import (
@@ -62,6 +62,16 @@ GRAPH_NAME = "inventory_approval"
 # instead of a flat reject, at most this many times, before the graph
 # insists on a final yes/no rather than negotiating indefinitely.
 MAX_REVISION_ROUNDS = 2
+
+# P3-6 TRUE HITL HARD-STOP trigger: a single call requesting a quantity at
+# or above this size is not a plausible legitimate spare-parts change --
+# it reads as a dangerous/corrupting input (a data-entry catastrophe, or a
+# malicious/compromised tool call trying to blow out inventory data at
+# scale). That is a fundamentally different situation from the normal
+# "sensitive change" path just below (which a manager can review and
+# approve/reject/revise): it must halt the graph permanently, not pause
+# it for a decision. See HardStop in state_graph/engine.py.
+HARD_STOP_QUANTITY_THRESHOLD = 100_000
 
 
 def authorize_and_validate(state: dict) -> dict[str, Any]:
@@ -86,6 +96,17 @@ def authorize_and_validate(state: dict) -> dict[str, Any]:
         current_quantity, part_status = part_row
     finally:
         conn.close()
+
+    if state["quantity"] >= HARD_STOP_QUANTITY_THRESHOLD:
+        # Dangerous condition: NOT a business decision for a manager to
+        # approve -- a TRUE hard-stop. This intentionally bypasses the
+        # normal sensitive/HITL path entirely.
+        raise HardStop(
+            "quantity_exceeds_safety_threshold",
+            part_id=state["part_id"],
+            requested_quantity=state["quantity"],
+            threshold=HARD_STOP_QUANTITY_THRESHOLD,
+        )
 
     outcome = validate_update_inventory(
         action=state["action"],
