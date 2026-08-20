@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS Checkpoints (
     graph_name    TEXT NOT NULL,
     node_name     TEXT NOT NULL,     -- last node that finished running
     status        TEXT NOT NULL CHECK (status IN (
-                        'running', 'paused_hitl', 'paused_external', 'completed', 'failed'
+                        'running', 'paused_hitl', 'paused_external', 'completed', 'failed',
+                        'halted'
                   )),
     state_json    TEXT NOT NULL,     -- full state snapshot after node_name ran
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -105,11 +106,37 @@ def _migrate_paused_external(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_halted_status(conn: sqlite3.Connection) -> None:
+    """One-time migration for local dev DBs created before the 'halted'
+    status existed (P3-6's TRUE HITL hard-stop -- distinct from
+    'paused_hitl'/'paused_external'/'failed', see engine.py's HardStop).
+    Same rebuild-in-place approach as `_migrate_paused_external` above,
+    for the same reason: SQLite can't ALTER a CHECK constraint in place."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='Checkpoints'"
+    ).fetchone()
+    if row is None or "halted" in row[0]:
+        return
+    conn.executescript(
+        """
+        ALTER TABLE Checkpoints RENAME TO Checkpoints_old;
+        """
+    )
+    conn.executescript(SCHEMA)  # recreates Checkpoints with the new CHECK + Tickets IF NOT EXISTS
+    conn.execute(
+        "INSERT INTO Checkpoints (id, thread_id, graph_name, node_name, status, state_json, created_at) "
+        "SELECT id, thread_id, graph_name, node_name, status, state_json, created_at FROM Checkpoints_old"
+    )
+    conn.executescript("DROP TABLE Checkpoints_old;")
+    conn.commit()
+
+
 def init_db() -> None:
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
         _migrate_paused_external(conn)
+        _migrate_halted_status(conn)
         conn.commit()
     finally:
         conn.close()
