@@ -134,3 +134,40 @@ class Checkpointer:
     def is_resumable(self, thread_id: str) -> bool:
         cp = self.latest(thread_id)
         return cp is not None and cp.status not in TERMINAL_STATUSES
+    
+    def list_latest(self, statuses: list[str] | None = None) -> list[Checkpoint]:
+        """The latest checkpoint for every distinct thread_id, optionally
+        filtered to a set of statuses. Lets the admin panel answer "every
+        thread currently paused_hitl" across all three graphs at once."""
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, thread_id, graph_name, node_name, status, state_json, created_at
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY thread_id ORDER BY id DESC
+                    ) AS rn
+                    FROM Checkpoints
+                )
+                WHERE rn = 1
+                ORDER BY id DESC
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+        out = [
+            Checkpoint(
+                id=r["id"],
+                thread_id=r["thread_id"],
+                graph_name=r["graph_name"],
+                node_name=r["node_name"],
+                status=r["status"],
+                state=json.loads(r["state_json"]),
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+        if statuses is not None:
+            out = [c for c in out if c.status in statuses]
+        return out
