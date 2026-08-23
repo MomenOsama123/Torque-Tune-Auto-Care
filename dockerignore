@@ -1,0 +1,38 @@
+# Keep the build context small (faster, more reproducible builds --
+# nothing host-specific leaks into the image).
+.git
+.gitignore
+.github
+
+# Never bake secrets into an image layer -- .env is read at runtime via
+# docker-compose's env_file instead.
+.env
+
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+venv/
+.venv/
+env/
+
+# Runtime state that must come from a volume, not the image -- baking a
+# stale copy in here would silently shadow the mounted volume's data on
+# some Docker configurations, and it bloats every rebuild.
+state_graph/_data/
+mcp-server/_data/
+*.sqlite3
+*.sqlite
+*.db
+
+# Generated evaluation artifacts -- large, regenerable, not needed to run
+# the app itself.
+planning_eval/results/
+context_eval/results/
+retrieval_eval/results/
+
+.DS_Store
+*.log

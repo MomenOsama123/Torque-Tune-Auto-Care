@@ -1,0 +1,20 @@
+# Pinned build of requirements.txt for reproducible Docker builds.
+# Generated against the versions actually exercised while validating this
+# project (state_graph tests + run_demo.py all pass on these exact pins).
+# Regenerate with:
+#   pip install -r requirements.txt pytest-asyncio --break-system-packages
+#   pip freeze --local > requirements-lock.txt
+# (then hand-trim to just this project's direct deps, as below.)
+
+numpy==2.4.4
+scikit-learn==1.8.0
+rank-bm25==0.2.2
+anthropic==0.125.0
+pydantic==2.13.4
+python-dotenv==1.2.2
+pytest==9.1.1
+pytest-asyncio==0.24.0
+networkx==3.6.1
+langchain-core==1.6.0
+langchain-anthropic==1.6.1
+streamlit==1.62.0

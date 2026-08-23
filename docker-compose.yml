@@ -1,0 +1,57 @@
+services:
+  platform:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: torque-tune:latest
+    command: ["platform"]
+    ports:
+      - "8501:8501"
+    environment:
+      # Optional -- unset means every RAG/memory/planning call falls back
+      # to the project's documented offline mocks (see README's
+      # Troubleshooting section). Put the real values in a local .env
+      # file (git-ignored) and reference it with env_file instead of
+      # hardcoding them here.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    env_file:
+      - .env
+    volumes:
+      # state_graph/_data/state_graph.sqlite3 -- the Checkpoints + Tickets
+      # DB. This MUST be a named volume (not left inside the image layer)
+      # or every `docker compose down` / container replacement silently
+      # wipes every in-flight thread and the whole point of durable
+      # checkpointing is lost the moment the container is recreated.
+      - state_graph_data:/app/state_graph/_data
+      # mcp-server/_data/tool_registry.json -- per-agent tool visibility
+      # set from the admin panel. Same reasoning: this must survive a
+      # container restart or every toggle an admin makes is lost.
+      - mcp_server_data:/app/mcp-server/_data
+      # RAG knowledge-base documents added/removed from the admin panel
+      # (mcp-server/rag/registry.py writes here). Also needs to survive
+      # restarts for the same reason.
+      - rag_kb_data:/app/mcp-server/resources/knowledge_base
+    restart: unless-stopped
+
+  # Run with: docker compose --profile test run --rm test
+  # A one-shot service, not a long-running one -- exits with pytest's
+  # exit code, so it's usable as a CI gate.
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: torque-tune:latest
+    command: ["test"]
+    profiles: ["test"]
+    environment:
+      - ANTHROPIC_API_KEY=
+    volumes:
+      # Tests get their own throwaway volumes -- never share the
+      # platform service's checkpoint/ticket data with a test run.
+      - state_graph_test_data:/app/state_graph/_data
+
+volumes:
+  state_graph_data:
+  mcp_server_data:
+  rag_kb_data:
+  state_graph_test_data:
