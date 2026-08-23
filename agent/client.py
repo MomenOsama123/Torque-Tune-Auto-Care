@@ -115,9 +115,13 @@ def is_planning_request(request: str) -> bool:
 
     The existing Memory/RAG path remains unchanged; this is the live-agent
     routing seam required by the Week 4 integration requirement.
+
+    Supports both English and Arabic planning keywords, since the Streamlit
+    platform's planning flow (Task 1) is Arabic-facing.
     """
     text = request.lower()
     planning_terms = (
+        # English
         "spare part",
         "spare parts",
         "repair job",
@@ -126,6 +130,15 @@ def is_planning_request(request: str) -> bool:
         "fulfill",
         "fulfillment",
         "prepare parts",
+        # Arabic (.lower() is a no-op on Arabic script, kept for symmetry)
+        "قطع غيار",
+        "قطعة غيار",
+        "شغل إصلاح",
+        "طلب إصلاح",
+        "مخزون",
+        "غير متوفر",
+        "توفير",
+        "تجهيز القطع",
     )
     return any(term in text for term in planning_terms)
 
