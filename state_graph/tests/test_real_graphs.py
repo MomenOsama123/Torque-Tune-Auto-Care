@@ -7,16 +7,21 @@ import uuid
 import pytest
 
 from state_graph.bootstrap import ensure_wired  # noqa: F401 -- import-time wiring
-import agent.demo_db as demo_db
 import databases.db as db
 from state_graph.db import reset_db
 
 
 @pytest.fixture(autouse=True)
-def fresh_databases():
+def fresh_databases(demo_db_connection):
+    """Wires ``databases.db.get_connection`` (and every module that
+    imports it directly) to a fresh, isolated demo SQLite database via the
+    shared ``demo_db_connection`` fixture in the root conftest.py -- see
+    that file for why this replaced a direct, never-restored
+    ``db.get_connection = ...`` assignment. ``reset_db()`` is this graph
+    suite's own, separate concern: it wipes the unrelated Checkpoints/
+    Tickets tables in state_graph/db.py, not the demo database above.
+    """
     reset_db()
-    demo_db.reset_demo_database()
-    db.get_connection = demo_db.build_demo_connection
     yield
 
 
