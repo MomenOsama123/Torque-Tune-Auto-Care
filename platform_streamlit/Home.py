@@ -31,20 +31,57 @@ st.subheader("جرب اسأل الـ Memory/RAG Agent")
 
 question = st.text_input("اكتب سؤالك (مثال: هل القطعة دي لسه تحت الضمان؟)")
 
-if st.button("إرسال") and question:
-    sys.path.insert(0, str(ROOT / "mcp-server"))
-    sys.path.insert(0, str(ROOT / "agent"))
-    import tool_registry
-    from client import is_planning_request
+sys.path.insert(0, str(ROOT / "mcp-server"))
+sys.path.insert(0, str(ROOT / "agent"))
+from client import is_planning_request, handle_user_request  # noqa: E402
+from planning.fulfillment_decomposition import JobRequest  # noqa: E402
+from pydantic import ValidationError  # noqa: E402
 
-    if is_planning_request(question):
-        st.warning(
-            "السؤال ده متعلق بتوفير قطع غيار / إصلاح، وده بيحتاج "
-            "job request منظم (job_id + required_parts) مش نص حر — "
-            "الـ Planning Agent مبني على `planning/fulfillment_planning.py` "
-            "وبياخد مدخلات structured، مش سؤال نصي زي RAG."
-        )
-    else:
+if question and is_planning_request(question):
+    st.info(
+        "السؤال ده متعلق بتوفير قطع غيار / إصلاح، وده بيحتاج job request "
+        "منظم (job_id + required_parts) — املأ البيانات دي وابدأ التخطيط."
+    )
+    planning_job_id = st.text_input("Job ID", value="4521", key="planning_job_id")
+    planning_parts_raw = st.text_area(
+        "القطع المطلوبة (قطعة في كل سطر — لحد 3 قطع)",
+        value="Brake Disc - Standard",
+        key="planning_parts_raw",
+    )
+    if st.button("ابدأ التخطيط"):
+        required_parts = [p.strip() for p in planning_parts_raw.splitlines() if p.strip()]
+        if not planning_job_id.strip():
+            st.error("لازم تكتب Job ID")
+        elif not required_parts:
+            st.error("لازم تكتب قطعة واحدة على الأقل")
+        elif len(required_parts) > 3:
+            st.error(
+                "الـ Planning Agent الحالي بيدعم لحد 3 قطع لكل طلب "
+                "(planning/fulfillment_decomposition.py, build_plan_first)"
+            )
+        else:
+            try:
+                job = JobRequest(job_id=planning_job_id.strip(), required_parts=required_parts)
+                with st.spinner("بيخطط..."):
+                    result = handle_user_request(question, job=job)
+                st.success(f"الخطة اتعملت — {len(result['decomposition'])} tasks")
+                st.write("**القرار النهائي:**", result["planning"]["final_decision"].output)
+                st.write("**رسالة للعميل:**", result["planning"]["customer_notification"])
+                with st.expander("تفاصيل الـ decomposition"):
+                    for task_id, output in result["decomposition"].items():
+                        st.write(f"- **{task_id}**: {output}")
+                if result["planning"]["alternative_choices"]:
+                    with st.expander("اختيارات البدائل (Tree-of-Thoughts)"):
+                        for part, thought in result["planning"]["alternative_choices"].items():
+                            st.write(f"- **{part}**: {thought.state} (score={thought.score:.2f})")
+            except ValidationError as e:
+                st.error(f"طلب غير صالح: {e}")
+            except ValueError as e:
+                st.error(str(e))
+else:
+    if st.button("إرسال") and question:
+        import tool_registry
+
         allowed = tool_registry.enabled_tools_for_agent("memory_rag")
         if "search_company_knowledge" not in allowed:
             st.error("أداة search_company_knowledge معطّلة لـ memory_rag من صفحة MCP Tools — فعّلها الأول")
