@@ -24,6 +24,11 @@ anthropic>=0.40.0
 # --- Config / validation ---
 pydantic>=2.6.0
 
+# --- Real SQL Server connection (databases/db.py, DB_CONNECTION_STRING) ---
+# Optional: only imported when DB_CONNECTION_STRING is actually set. Every
+# test and the seeded SQLite demo path (agent/demo_db.py) work without it.
+pyodbc>=5.1.0
+
 # --- Loading ANTHROPIC_API_KEY from .env locally ---
 python-dotenv>=1.0.1
 
